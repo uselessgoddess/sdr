@@ -140,7 +140,9 @@ fn self_world(
 }
 
 /// Plot the headline metrics over the run: fill fraction (blue), wall coverage
-/// (green) and pressure normalised by its peak (red), all on a `0..1` axis.
+/// (green) and membrane pressure normalised by its peak (red), all on a `0..1`
+/// axis. Pressure uses the focal membrane (wall) load — the jet-impingement peak
+/// on the lining — with non-physical single-cell solver artifacts excluded.
 pub fn render_timeseries(frames: &[FrameMetrics], width: u32, height: u32) -> RgbImage {
     let mut img = RgbImage::from_pixel(width, height, Rgb([250, 250, 252]));
     let (ml, mr, mt, mb) = (8i64, 8i64, 8i64, 8i64);
@@ -163,7 +165,7 @@ pub fn render_timeseries(frames: &[FrameMetrics], width: u32, height: u32) -> Rg
         return img;
     }
     let n = frames.len();
-    let peak_p = frames.iter().map(|m| m.max_pressure_pa).fold(0.0_f64, f64::max).max(1e-9);
+    let peak_p = frames.iter().map(|m| m.peak_wall_pressure_pa).fold(0.0_f64, f64::max).max(1e-9);
     let map = |i: usize, val: f64| -> (i64, i64) {
         let fx = x0 as f64 + (x1 - x0) as f64 * i as f64 / (n - 1) as f64;
         let v = val.clamp(0.0, 1.0);
@@ -173,7 +175,7 @@ pub fn render_timeseries(frames: &[FrameMetrics], width: u32, height: u32) -> Rg
     let series = [
         (Rgb([40, 90, 220]), Box::new(|m: &FrameMetrics| m.fill_fraction) as Box<dyn Fn(&FrameMetrics) -> f64>),
         (Rgb([30, 160, 60]), Box::new(|m: &FrameMetrics| m.wall_coverage)),
-        (Rgb([210, 60, 50]), Box::new(move |m: &FrameMetrics| m.max_pressure_pa / peak_p)),
+        (Rgb([210, 60, 50]), Box::new(move |m: &FrameMetrics| m.peak_wall_pressure_pa / peak_p)),
     ];
     for (color, f) in &series {
         for i in 1..n {

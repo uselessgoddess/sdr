@@ -155,7 +155,7 @@ impl Solver {
             saved_u: Vec::new(),
             saved_v: Vec::new(),
             saved_w: Vec::new(),
-            rng: Rng::new(0x5d_eece_66d),
+            rng: Rng::new(0x5deece66d),
             emit_accum: 0.0,
         }
     }
@@ -439,6 +439,11 @@ impl Solver {
         self.drained as f64 * self.particle_volume()
     }
 
+    /// Number of cells currently classified as fluid (diagnostic).
+    pub fn cells_fluid_count(&self) -> usize {
+        self.cells.iter().filter(|c| **c == Cell::Fluid).count()
+    }
+
     /// Peak fluid gauge pressure in the cavity, pascals.
     pub fn max_pressure(&self) -> f64 {
         self.cells
@@ -607,7 +612,7 @@ mod tests {
         for _ in 0..8 {
             s.step(0.005);
         }
-        assert!(s.particles.len() > 0, "needle should have injected fluid");
+        assert!(!s.particles.is_empty(), "needle should have injected fluid");
         // Fluid volume should be positive and finite.
         let vol = s.fluid_volume();
         assert!(vol > 0.0 && vol.is_finite(), "fluid volume {vol}");
@@ -629,5 +634,37 @@ mod tests {
             .map(|&p| s.solid.sample(p))
             .fold(f64::NEG_INFINITY, f64::max);
         assert!(max_phi < s.solid.dx, "a particle sits inside the wall (phi = {max_phi})");
+    }
+
+    /// Two independent runs of the same scene must agree bit-for-bit. This is
+    /// the crate's reproducibility guarantee, and it is fragile: any reduction
+    /// whose order depends on thread scheduling (e.g. `par_iter().sum()` in the
+    /// CG dot product) would make the recovered pressure — and every quantity
+    /// derived from it — drift between runs. The solve runs in parallel, so this
+    /// exercises the very code paths where such non-determinism would appear.
+    #[test]
+    fn simulation_is_bit_reproducible() {
+        let run = || {
+            let mut s = small_solver();
+            for _ in 0..16 {
+                s.step(0.005);
+            }
+            s
+        };
+        let a = run();
+        let b = run();
+
+        assert_eq!(a.particles.len(), b.particles.len(), "particle count diverged");
+        // Pressure field: compare raw bit patterns, not approximate equality.
+        assert_eq!(a.pressure.len(), b.pressure.len());
+        for (idx, (&pa, &pb)) in a.pressure.iter().zip(&b.pressure).enumerate() {
+            assert_eq!(pa.to_bits(), pb.to_bits(), "pressure[{idx}] differs: {pa} vs {pb}");
+        }
+        // Particle positions: every component identical down to the last bit.
+        for (idx, (&qa, &qb)) in a.particles.positions.iter().zip(&b.particles.positions).enumerate() {
+            assert_eq!(qa.x.to_bits(), qb.x.to_bits(), "particle[{idx}].x differs");
+            assert_eq!(qa.y.to_bits(), qb.y.to_bits(), "particle[{idx}].y differs");
+            assert_eq!(qa.z.to_bits(), qb.z.to_bits(), "particle[{idx}].z differs");
+        }
     }
 }

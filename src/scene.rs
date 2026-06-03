@@ -23,7 +23,7 @@ const MM: f64 = 1e-3; // millimetres -> metres
 const ML_PER_S: f64 = 1e-6; // millilitres/second -> m³/s
 
 /// Top-level scene description (deserialised from TOML).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SceneConfig {
     pub sinus: SinusConfig,
@@ -33,18 +33,6 @@ pub struct SceneConfig {
     /// Optional explicit drainage box (millimetres). If omitted, a parametric
     /// sinus derives one automatically at the socket opening.
     pub outlet: Option<BoxMm>,
-}
-
-impl Default for SceneConfig {
-    fn default() -> Self {
-        SceneConfig {
-            sinus: SinusConfig::default(),
-            needle: NeedleConfig::default(),
-            fluid: FluidConfig::default(),
-            sim: SimConfig::default(),
-            outlet: None,
-        }
-    }
 }
 
 /// Cavity geometry: either parametric, or a loaded watertight mesh.

@@ -508,8 +508,37 @@ fn apply_mic0(a: &Laplacian, precon: &[f64], cells: &[Cell], r: &[f64], z: &mut 
     }
 }
 
+/// Inner product `⟨a, b⟩`, computed by a **deterministic** parallel reduction.
+///
+/// `par_iter().sum()` reduces in rayon's work-stealing order, which varies from
+/// run to run; since floating-point addition is not associative, the result
+/// then differs in the last ULPs between otherwise-identical runs. Inside the
+/// conjugate-gradient iteration those ULPs set the `α`/`β` step sizes and
+/// compound across iterations, so the recovered pressure — and every velocity,
+/// fill fraction and pressure metric downstream — drifts noticeably. That would
+/// break the crate's byte-for-byte reproducibility guarantee and make CI
+/// assertions flaky.
+///
+/// Instead we sum within fixed-size chunks sequentially and then sum the
+/// per-chunk partials in chunk order. `par_chunks` + indexed `collect` preserve
+/// index order regardless of which thread computed which chunk, so the addition
+/// tree — and therefore the bit pattern of the result — is identical on every
+/// run while the per-chunk work still runs in parallel.
 fn dot(a: &[f64], b: &[f64]) -> f64 {
-    a.par_iter().zip(b).map(|(&x, &y)| x * y).sum()
+    debug_assert_eq!(a.len(), b.len());
+    const CHUNK: usize = 4096;
+    let partials: Vec<f64> = a
+        .par_chunks(CHUNK)
+        .zip(b.par_chunks(CHUNK))
+        .map(|(ac, bc)| {
+            let mut acc = 0.0f64;
+            for (&x, &y) in ac.iter().zip(bc) {
+                acc += x * y;
+            }
+            acc
+        })
+        .collect();
+    partials.iter().sum()
 }
 
 fn inf_norm(a: &[f64]) -> f64 {
@@ -610,6 +639,28 @@ mod tests {
             }
         }
         assert!(max_div < 1e-5, "max interior divergence after projection: {max_div} (iters {})", rep.iters);
+    }
+
+    /// The pressure solve must be bit-for-bit reproducible across runs. The CG
+    /// dot product runs in parallel, so a scheduling-dependent reduction order
+    /// would make the recovered pressure drift in the low bits — undetectable to
+    /// approximate checks but fatal to a reproducibility guarantee. A grid this
+    /// size spans several reduction chunks, exercising the parallel path.
+    #[test]
+    fn pressure_solve_is_bit_reproducible() {
+        let solve = SolveParams { max_iters: 400, tol: 1e-12 };
+        let run = || {
+            let mut g = MacGrid::new(24, 24, 24, 0.01, Vec3::ZERO);
+            fill_divergent(&mut g);
+            let cells = classify_box(&g);
+            project_capturing(&mut g, &cells, 1000.0, 1e-3, solve).1
+        };
+        let pa = run();
+        let pb = run();
+        assert_eq!(pa.len(), pb.len());
+        for (idx, (&a, &b)) in pa.iter().zip(&pb).enumerate() {
+            assert_eq!(a.to_bits(), b.to_bits(), "pressure[{idx}] not reproducible: {a} vs {b}");
+        }
     }
 
     /// Build a classification with a 1-cell solid wall around an all-fluid core.
