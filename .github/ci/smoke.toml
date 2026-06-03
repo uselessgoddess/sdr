@@ -1,0 +1,21 @@
+# Fast smoke scene for continuous integration.
+#
+# This is deliberately coarse (2 mm grid, 0.5 s, 10 frames) so the whole
+# pipeline — simulate → metrics → previews → splashsurf — runs in a few seconds
+# on a CI runner, while still producing a meaningful jet that fills the cavity
+# and washes the wall. The clinical defaults live in `examples/scene.toml`.
+
+[sim]
+resolution_mm = 2.0   # coarse grid: fast, still resolves the cavity
+duration_s = 0.5      # half a second of irrigation
+frames = 10           # 10 output frames
+pcg_iters = 200
+pcg_tol = 1e-6
+
+[needle]
+auto = true           # auto-place the tip at the socket entrance
+diameter_mm = 0.8     # ~21G irrigation needle bore
+flow_rate_ml_s = 5.0  # 5 ml/s push on the syringe
+
+[fluid]
+particles_per_cell = 8
