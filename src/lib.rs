@@ -21,6 +21,7 @@ pub mod particles;
 pub mod pressure;
 pub mod sdf;
 pub mod sinus;
+pub mod solver;
 pub mod surface_nets;
 
 pub use grid::MacGrid;
@@ -29,3 +30,4 @@ pub use mesh::TriMesh;
 pub use particles::ParticleSet;
 pub use pressure::{project, Cell, SolveParams, SolveReport};
 pub use sdf::Sdf;
+pub use solver::{FluidParams, Needle, Solver};
