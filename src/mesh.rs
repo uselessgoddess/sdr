@@ -231,8 +231,8 @@ impl TriMesh {
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
         let mut remap: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
-        for t in 0..self.triangle_count() {
-            if tri_comp[t] != best {
+        for (t, &comp) in tri_comp.iter().enumerate() {
+            if comp != best {
                 continue;
             }
             let mut tri = [0u32; 3];
