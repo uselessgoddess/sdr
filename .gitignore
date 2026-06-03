@@ -19,3 +19,7 @@ Cargo.lock.orig
 *.swp
 .idea/
 .vscode/
+
+# Python bytecode (experiment scripts)
+__pycache__/
+*.pyc
