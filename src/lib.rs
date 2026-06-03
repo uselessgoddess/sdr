@@ -17,6 +17,8 @@
 pub mod math;
 pub mod mesh;
 pub mod sdf;
+pub mod sinus;
+pub mod surface_nets;
 
 pub use math::{Aabb, Vec3};
 pub use mesh::TriMesh;
