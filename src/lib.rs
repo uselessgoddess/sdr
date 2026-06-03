@@ -22,6 +22,7 @@ pub mod output;
 pub mod particles;
 pub mod pressure;
 pub mod recon;
+pub mod render;
 pub mod scene;
 pub mod sdf;
 pub mod sinus;
