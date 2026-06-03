@@ -14,12 +14,16 @@
 //! surface-reconstruction tool reads directly, so the result can be meshed and
 //! rendered in Blender exactly as in the original pipeline.
 
+pub mod grid;
 pub mod math;
 pub mod mesh;
+pub mod particles;
 pub mod sdf;
 pub mod sinus;
 pub mod surface_nets;
 
+pub use grid::MacGrid;
 pub use math::{Aabb, Vec3};
 pub use mesh::TriMesh;
+pub use particles::ParticleSet;
 pub use sdf::Sdf;
