@@ -112,6 +112,10 @@ pub struct NeedleConfig {
     pub diameter_mm: f64,
     /// Volumetric flow rate, millilitres per second.
     pub flow_rate_ml_s: f64,
+    /// Irrigate for this many seconds, then stop and let the dose settle into a
+    /// pool. Omit to inject for the whole run. `flow_rate_ml_s * inject_s` is the
+    /// delivered dose; keep it below the cavity volume for a partial fill.
+    pub inject_s: Option<f64>,
 }
 
 impl Default for NeedleConfig {
@@ -122,6 +126,7 @@ impl Default for NeedleConfig {
             axis: [0.0, 1.0, 0.0],
             diameter_mm: 0.8,
             flow_rate_ml_s: 5.0,
+            inject_s: None,
         }
     }
 }
@@ -136,6 +141,13 @@ pub struct FluidConfig {
     /// FLIP/PIC blend (1 = lively, 0 = viscous).
     pub flip_ratio: f64,
     pub particles_per_cell: usize,
+    /// Volume-control strength that relieves over-packed cells (0 = off, plain
+    /// FLIP which clumps; 1 = default). See [`FluidParams::volume_stiffness`].
+    pub volume_stiffness: f64,
+    /// Redistribute over-packed cells' surplus particles into open cavity cells
+    /// (`true` = default). The decisive anti-clumping step for a point jet in a
+    /// closed cavity. See [`FluidParams::redistribute`].
+    pub redistribute: bool,
 }
 
 impl Default for FluidConfig {
@@ -146,6 +158,8 @@ impl Default for FluidConfig {
             gravity_m_s2: [f.gravity.x, f.gravity.y, f.gravity.z],
             flip_ratio: f.flip_ratio,
             particles_per_cell: f.particles_per_cell,
+            volume_stiffness: f.volume_stiffness,
+            redistribute: f.redistribute,
         }
     }
 }
@@ -161,6 +175,8 @@ impl FluidConfig {
             ),
             flip_ratio: self.flip_ratio,
             particles_per_cell: self.particles_per_cell,
+            volume_stiffness: self.volume_stiffness,
+            redistribute: self.redistribute,
         }
     }
 }
@@ -347,6 +363,7 @@ impl SceneConfig {
             axis,
             radius,
             flow_rate,
+            inject_until: self.needle.inject_s.unwrap_or(f64::INFINITY),
         })
     }
 }
@@ -354,6 +371,110 @@ impl SceneConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The committed real antrum mesh, resolved against the crate root so the
+    /// test runs from any working directory.
+    fn real_mesh_path() -> String {
+        format!("{}/assets/maxillary_sinus.stl", env!("CARGO_MANIFEST_DIR"))
+    }
+
+    /// The real-mesh irrigation scene (same geometry and needle as
+    /// `examples/maxillary_real.toml`) but at a deliberately coarse resolution
+    /// so the whole mesh → SDF → solver path runs inside CI in a second or two.
+    /// The production render uses 0.8 mm; here 3 mm is plenty to exercise the
+    /// pipeline and guard reproducibility.
+    fn real_mesh_scene() -> SceneConfig {
+        let mut cfg = SceneConfig::default();
+        cfg.sinus.mesh = Some(real_mesh_path());
+        cfg.sinus.model_resolution_mm = 3.0;
+        cfg.needle.auto = false;
+        cfg.needle.tip_mm = Some([17.31, 7.66, 19.81]);
+        cfg.needle.axis = [0.0, -0.98, 0.20];
+        cfg.needle.diameter_mm = 0.8;
+        cfg.needle.flow_rate_ml_s = 4.0;
+        cfg.fluid.gravity_m_s2 = [0.0, 8.03, -5.63];
+        cfg.sim.resolution_mm = 3.0;
+        cfg.sim.duration_s = 0.05;
+        cfg.sim.frames = 2;
+        cfg
+    }
+
+    #[test]
+    fn real_mesh_scene_builds_steps_and_accumulates() {
+        let built = real_mesh_scene()
+            .build()
+            .expect("the committed real-mesh scene should build");
+        // Cavity volume is taken straight from the mesh (~2.23 ml), so it is
+        // independent of the coarse SDF resolution.
+        assert!(
+            (1.5e-6..3.0e-6).contains(&built.cavity_volume),
+            "cavity volume {} m^3 is far from the ~2.23 ml antrum",
+            built.cavity_volume
+        );
+
+        let mut solver = built.solver;
+        for _ in 0..8 {
+            solver.substep(2.0e-4);
+        }
+        let early = solver.particles.len();
+        assert!(early > 0, "the needle never emitted any fluid");
+
+        for _ in 0..8 {
+            solver.substep(2.0e-4);
+        }
+        // This scene has no outlet, so particles can only accumulate — a drop
+        // would mean mass was lost.
+        assert!(
+            solver.particles.len() >= early,
+            "particle count fell ({} < {early}): mass was not conserved",
+            solver.particles.len()
+        );
+        assert!(
+            solver.particles.positions.iter().all(|p| p.is_finite()),
+            "a particle position went non-finite"
+        );
+        // Bounds enforcement must keep every particle inside the cavity (one
+        // cell of wall slack, as in the solver's own tests).
+        assert!(
+            solver
+                .particles
+                .positions
+                .iter()
+                .all(|&p| solver.solid.sample(p) < solver.solid.dx),
+            "a particle escaped the cavity walls"
+        );
+    }
+
+    #[test]
+    fn real_mesh_scene_is_bit_reproducible() {
+        let run = || {
+            let mut s = real_mesh_scene().build().unwrap().solver;
+            for _ in 0..16 {
+                s.substep(2.0e-4);
+            }
+            s.particles
+        };
+        let a = run();
+        let b = run();
+        assert_eq!(a.len(), b.len(), "particle count is not reproducible");
+        for (i, (&pa, &pb)) in a.positions.iter().zip(&b.positions).enumerate() {
+            assert_eq!(
+                pa.x.to_bits(),
+                pb.x.to_bits(),
+                "particle[{i}].x not reproducible"
+            );
+            assert_eq!(
+                pa.y.to_bits(),
+                pb.y.to_bits(),
+                "particle[{i}].y not reproducible"
+            );
+            assert_eq!(
+                pa.z.to_bits(),
+                pb.z.to_bits(),
+                "particle[{i}].z not reproducible"
+            );
+        }
+    }
 
     #[test]
     fn default_roundtrips_through_toml() {

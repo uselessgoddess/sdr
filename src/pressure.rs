@@ -106,6 +106,28 @@ pub fn project_capturing(
     dt: f64,
     params: SolveParams,
 ) -> (SolveReport, Vec<f64>) {
+    project_capturing_with_source(grid, cells, rho, dt, params, None)
+}
+
+/// [`project_capturing`] with an optional per-cell **volume-control source**.
+///
+/// `source[c]` is a target *outward* face-velocity sum (m/s) added to fluid cell
+/// `c`. It is the volume-control term of Zhu & Bridson, *Animating Sand as a
+/// Fluid* (SIGGRAPH 2005): a hybrid FLIP/PIC method has no mechanism to relieve
+/// cells that particles have over-packed, because the projection only makes the
+/// *grid* velocity divergence-free and is blind to particle density. Feeding a
+/// positive divergence target into over-full cells raises their pressure, so the
+/// projection pushes fluid out into neighbouring cells — the fluid spreads and
+/// fills the cavity instead of clumping into a thin streak. `None` (or all
+/// zeros) reproduces the plain incompressible projection exactly.
+pub fn project_capturing_with_source(
+    grid: &mut MacGrid,
+    cells: &[Cell],
+    rho: f64,
+    dt: f64,
+    params: SolveParams,
+    source: Option<&[f64]>,
+) -> (SolveReport, Vec<f64>) {
     let (nx, ny, nz) = (grid.nx, grid.ny, grid.nz);
     let n = nx * ny * nz;
     assert_eq!(
@@ -113,6 +135,9 @@ pub fn project_capturing(
         n,
         "cell classification must cover the whole grid"
     );
+    if let Some(src) = source {
+        assert_eq!(src.len(), n, "volume-control source must cover the grid");
+    }
 
     let cell = |i: usize, j: usize, k: usize| cells[(k * ny + j) * nx + i];
 
@@ -120,8 +145,10 @@ pub fn project_capturing(
     //    a solid cell or the domain boundary. Walls are static => zero.
     enforce_solid_faces(grid, cells);
 
-    // 2. Build the right-hand side b = −(ρ·dx/dt)·D, where D is the raw face
-    //    divergence of each fluid cell.
+    // 2. Build the right-hand side b = −(ρ·dx/dt)·(D − S), where D is the raw
+    //    face divergence of each fluid cell and S is the volume-control source.
+    //    A positive S looks like a local expansion, so the solve raises that
+    //    cell's pressure and drives fluid outward.
     let inv_scale = rho * grid.dx / dt;
     let mut b = vec![0.0f64; n];
     for k in 0..nz {
@@ -134,7 +161,8 @@ pub fn project_capturing(
                 let div = (grid.u[grid.u_idx(i + 1, j, k)] - grid.u[grid.u_idx(i, j, k)])
                     + (grid.v[grid.v_idx(i, j + 1, k)] - grid.v[grid.v_idx(i, j, k)])
                     + (grid.w[grid.w_idx(i, j, k + 1)] - grid.w[grid.w_idx(i, j, k)]);
-                b[c] = -inv_scale * div;
+                let s = source.map(|src| src[c]).unwrap_or(0.0);
+                b[c] = -inv_scale * (div - s);
             }
         }
     }
