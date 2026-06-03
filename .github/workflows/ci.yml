@@ -1,0 +1,177 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Style & static analysis: formatting and a zero-warning clippy pass.
+  # ---------------------------------------------------------------------------
+  lint:
+    name: Format & Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+      - name: cargo clippy -D warnings
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+  # ---------------------------------------------------------------------------
+  # Unit & integration tests (release). Covers, among others, the two
+  # bit-reproducibility regression tests (pressure solve + full simulation) and
+  # the non-blank render test (slice_shows_cavity_and_fluid).
+  # ---------------------------------------------------------------------------
+  test:
+    name: Tests (release)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo build (release)
+        run: cargo build --release --all-targets
+      - name: cargo test (release)
+        run: cargo test --release -- --nocapture
+
+  # ---------------------------------------------------------------------------
+  # End-to-end pipeline: write a template scene, generate the cavity mesh, run a
+  # short irrigation simulation behind clinical CI gates, and confirm that all
+  # expected outputs (metrics + previews) were produced. The rendered previews
+  # are uploaded as artifacts for human visual review. The simulation is also
+  # run a second time and the summaries compared byte-for-byte to guard the
+  # solver's reproducibility guarantee.
+  # ---------------------------------------------------------------------------
+  simulate:
+    name: End-to-end simulation + gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build sdr (fast profile)
+        run: cargo build --profile fast --bin sdr
+      - name: Write a template scene
+        run: ./target/fast/sdr init --output scene.toml && test -s scene.toml
+      - name: Generate the cavity mesh
+        run: |
+          ./target/fast/sdr generate-sinus --output sinus.obj
+          test -s sinus.obj
+          grep -q '^v ' sinus.obj && grep -q '^f ' sinus.obj
+      - name: Run irrigation simulation (clinical CI gates)
+        run: |
+          ./target/fast/sdr simulate \
+            --scene .github/ci/smoke.toml \
+            --out-dir out \
+            --preview-px 600 \
+            --min-fill 0.05 \
+            --min-coverage 0.10
+      - name: Check expected outputs exist
+        run: |
+          set -e
+          test -s out/summary.json
+          test -s out/metrics.json
+          test -s out/metrics.csv
+          test -s out/metrics.png
+          n=$(ls out/preview/slice_*.png | wc -l)
+          echo "preview frames: $n"
+          test "$n" -eq 10
+          # Each preview must carry real content, not a blank canvas.
+          for f in out/preview/slice_*.png; do
+            sz=$(wc -c < "$f")
+            test "$sz" -gt 1000 || { echo "::error::$f is suspiciously small ($sz B)"; exit 1; }
+          done
+      - name: Show clinical summary
+        run: cat out/summary.json
+      - name: Reproducibility — identical summaries across runs
+        run: |
+          set -e
+          ./target/fast/sdr simulate --scene .github/ci/smoke.toml --out-dir det1 --preview-px 0 --quiet
+          ./target/fast/sdr simulate --scene .github/ci/smoke.toml --out-dir det2 --preview-px 0 --quiet
+          h1=$(sha256sum det1/summary.json | cut -d' ' -f1)
+          h2=$(sha256sum det2/summary.json | cut -d' ' -f1)
+          echo "run1 summary sha256: $h1"
+          echo "run2 summary sha256: $h2"
+          if [ "$h1" != "$h2" ]; then
+            echo "::error::summary.json is not byte-for-byte reproducible"
+            diff det1/summary.json det2/summary.json || true
+            exit 1
+          fi
+          # Per-frame metrics must match too.
+          diff det1/metrics.csv det2/metrics.csv
+          echo "Simulation is byte-for-byte reproducible."
+      - name: Upload simulation previews & metrics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: simulation-output
+          path: |
+            out/preview/*.png
+            out/metrics.png
+            out/summary.json
+            out/metrics.csv
+            out/metrics.json
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  # splashsurf interop: reconstruct the final particle frame into a watertight
+  # surface mesh (the thesis pipeline: solver -> splashsurf -> Blender) and
+  # assert the mesh is non-trivial. The binary is cached between runs.
+  # ---------------------------------------------------------------------------
+  surface:
+    name: splashsurf reconstruction
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Cache splashsurf binary
+        id: cache-splashsurf
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/splashsurf
+          key: splashsurf-0.14-${{ runner.os }}
+      - name: Install splashsurf
+        if: steps.cache-splashsurf.outputs.cache-hit != 'true'
+        run: cargo install splashsurf --locked --version ^0.14
+      - name: Build sdr (fast profile)
+        run: cargo build --profile fast --bin sdr
+      - name: Simulate and reconstruct the final surface
+        run: |
+          ./target/fast/sdr simulate \
+            --scene .github/ci/smoke.toml \
+            --out-dir out \
+            --preview-px 0 \
+            --reconstruct \
+            --quiet
+      - name: Assert a non-trivial watertight mesh was produced
+        run: |
+          set -e
+          mesh=out/surface/surface_final.obj
+          test -s "$mesh"
+          v=$(grep -c '^v ' "$mesh" || true)
+          f=$(grep -c '^f ' "$mesh" || true)
+          echo "reconstructed mesh: $v vertices, $f faces"
+          test "$v" -ge 100
+          test "$f" -ge 100
+      - name: Upload reconstructed surface
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reconstructed-surface
+          path: out/surface/surface_final.obj
+          if-no-files-found: warn

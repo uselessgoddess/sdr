@@ -1,0 +1,43 @@
+# =============================================================================
+# Example: placing the needle by hand and tilting the patient's head.
+# =============================================================================
+#
+# The default workflow auto-places the needle at the socket. This example shows
+# the manual alternative a clinician uses to study a *specific* approach:
+#
+#   * auto = false + tip_mm  — put the tip exactly where the needle would sit.
+#   * axis                   — aim the jet (here, up and slightly medial).
+#   * gravity_m_s2           — tilt to model a forward-leaning head, so fluid
+#                              pools toward the front of the sinus.
+#
+# Run it:
+#     sdr simulate --scene examples/manual_needle.toml --out-dir out
+#
+# (For a patient mesh segmented from DICOM, set [sinus].mesh and you *must*
+# place the needle manually like this — auto-placement only works parametrically.)
+
+[sinus]
+semi_axes_mm = [17.0, 16.0, 13.0]
+socket_xz_mm = [6.0, 0.0]
+socket_radius_mm = 2.5
+socket_depth_mm = 6.0
+
+[needle]
+auto = false                 # we will place the tip ourselves
+tip_mm = [6.0, -12.0, 0.0]   # a few mm above the socket floor, in the cavity
+axis = [0.0, 1.0, 0.3]       # aim up and slightly toward the lateral wall
+diameter_mm = 0.8            # 21G
+flow_rate_ml_s = 4.0
+
+[fluid]
+# Head leaning forward ~20°: gravity tilts out of pure -Y toward -Z.
+gravity_m_s2 = [0.0, -9.2, -3.4]
+flip_ratio = 0.95
+particles_per_cell = 8
+
+[sim]
+resolution_mm = 1.0
+duration_s = 1.5
+frames = 45
+pcg_iters = 200
+pcg_tol = 1e-6

@@ -1,0 +1,122 @@
+# =============================================================================
+# sdr — annotated scene configuration (clinical units: mm, ml/s)
+# =============================================================================
+#
+# This is the doctor-facing input: everything is in millimetres and
+# millilitres-per-second, never SI base units or grid cells. `sdr` converts to
+# SI internally, so the physical scale (a sub-millimetre needle bore inside a
+# ~3 cm cavity) is handled correctly for you.
+#
+# Every field has a sensible default — a nearly empty file still runs. Run:
+#
+#     sdr simulate --scene examples/scene.toml --out-dir out --reconstruct
+#
+# Tip: `sdr init` writes the bare default values; this file is the same schema
+# with the reasoning spelled out.
+
+# -----------------------------------------------------------------------------
+# [sinus] — the air cavity to irrigate.
+# -----------------------------------------------------------------------------
+# Two ways to provide geometry:
+#   (a) parametric — the fields below sculpt an anatomically plausible sinus.
+#   (b) patient mesh — point `mesh` at a watertight .obj/.stl (in millimetres),
+#       e.g. one segmented from DICOM in 3D Slicer and cleaned in Blender. When
+#       `mesh` is set, the parametric fields are ignored.
+[sinus]
+# mesh = "patient_sinus.obj"   # uncomment to use a segmented patient cavity
+
+# Body half-axes [anteroposterior, vertical, mediolateral], mm.
+# A typical adult maxillary sinus is roughly 34 x 33 x 23 mm overall.
+semi_axes_mm = [17.0, 16.0, 13.0]
+
+# Cavity centre in world space, mm. Leave at the origin unless you are
+# composing several structures.
+center_mm = [0.0, 0.0, 0.0]
+
+# Floor taper: 1.0 = ellipsoidal, ~0.6 = the pyramidal floor seen in CT.
+taper = 0.6
+
+# Wall undulation amplitude (fraction of radius) — adds realistic mucosal
+# bumpiness so the wash pattern is not artificially smooth.
+bumpiness = 0.12
+
+# Oroantral communication (the extracted-tooth socket) position on the floor,
+# given as [x, z] in mm. This is where the needle is auto-placed and where
+# fluid drains. The classic site is the first/second molar region.
+socket_xz_mm = [6.0, 0.0]
+
+# Socket channel radius and how far it protrudes below the floor, mm.
+socket_radius_mm = 2.5
+socket_depth_mm = 6.0
+
+# Geometry/SDF resolution, mm. Finer = smoother walls but slower meshing.
+model_resolution_mm = 0.7
+
+# -----------------------------------------------------------------------------
+# [needle] — the irrigation needle: where it sits and how hard you push.
+# -----------------------------------------------------------------------------
+[needle]
+# Auto-place the tip just inside the socket entrance, aimed into the cavity.
+# This is the easy path for the parametric sinus.
+auto = true
+
+# To place the needle yourself (required for a loaded patient mesh), set an
+# explicit tip in mm and turn auto off:
+#   auto = false
+#   tip_mm = [6.0, -14.0, 0.0]
+
+# Jet direction (need not be normalised). +Y points up into the cavity.
+axis = [0.0, 1.0, 0.0]
+
+# Inner bore diameter, mm. With the flow rate this fixes the jet speed
+# (v = Q / area), so the physical scale of the jet is correct. 0.8 mm ≈ 21G.
+diameter_mm = 0.8
+
+# Volumetric flow rate at the tip, millilitres per second (syringe push).
+flow_rate_ml_s = 5.0
+
+# -----------------------------------------------------------------------------
+# [fluid] — the irrigant / secretion being modelled.
+# -----------------------------------------------------------------------------
+[fluid]
+# Density, kg/m³. Saline ≈ 1000; mucopurulent secretion is a little higher.
+density_kg_m3 = 1000.0
+
+# Gravity, m/s². Tilt this vector to model the patient's head position
+# (e.g. supine vs. upright changes how fluid pools and drains).
+gravity_m_s2 = [0.0, -9.81, 0.0]
+
+# FLIP/PIC blend in [0, 1]: 1.0 = lively/low-dissipation, lower = more viscous
+# and damped. 0.95 is a good default for a watery irrigant.
+flip_ratio = 0.95
+
+# Target marker particles per grid cell. More = smoother surface & metrics,
+# at higher cost. 8 is a fast default; 16 looks nicer for final renders.
+particles_per_cell = 8
+
+# -----------------------------------------------------------------------------
+# [sim] — discretisation and output cadence.
+# -----------------------------------------------------------------------------
+[sim]
+# Solver grid spacing, mm. THE main speed/accuracy knob. 1.0 mm is a good
+# balance; 2.0 mm is fast for previews; 0.5 mm is detailed but much heavier.
+resolution_mm = 1.0
+
+# Total simulated time, seconds, and how many frames to write over it.
+duration_s = 2.0
+frames = 60
+
+# Pressure projection (incompressibility) solve: max conjugate-gradient
+# iterations and convergence tolerance. The defaults converge for this problem.
+pcg_iters = 200
+pcg_tol = 1e-6
+
+# -----------------------------------------------------------------------------
+# [outlet] — OPTIONAL explicit drainage box, mm (where fluid leaves the domain).
+# -----------------------------------------------------------------------------
+# A parametric sinus derives this automatically at the socket opening, so you
+# normally omit it. Provide it to drain a loaded patient mesh, or to override.
+#
+# [outlet]
+# min_mm = [3.0, -22.0, -3.0]
+# max_mm = [9.0, -18.0,  3.0]

@@ -1,0 +1,21 @@
+# Rust build artifacts
+/target
+**/*.rs.bk
+Cargo.lock.orig
+
+# Simulation output
+/out
+/output
+*.vtk
+*.bgeo
+!tests/**/*.vtk
+
+# Reference materials (large videos, downloaded attachments)
+/materials
+/ci-logs
+
+# Editor / OS
+.DS_Store
+*.swp
+.idea/
+.vscode/
