@@ -17,8 +17,16 @@ pub struct Vec3 {
 }
 
 impl Vec3 {
-    pub const ZERO: Vec3 = Vec3 { x: 0.0, y: 0.0, z: 0.0 };
-    pub const ONE: Vec3 = Vec3 { x: 1.0, y: 1.0, z: 1.0 };
+    pub const ZERO: Vec3 = Vec3 {
+        x: 0.0,
+        y: 0.0,
+        z: 0.0,
+    };
+    pub const ONE: Vec3 = Vec3 {
+        x: 1.0,
+        y: 1.0,
+        z: 1.0,
+    };
 
     #[inline]
     pub const fn new(x: f64, y: f64, z: f64) -> Self {
@@ -281,10 +289,7 @@ mod tests {
 
     #[test]
     fn aabb_expands() {
-        let bb = Aabb::from_points(&[
-            Vec3::new(-1.0, 2.0, 0.0),
-            Vec3::new(3.0, -2.0, 5.0),
-        ]);
+        let bb = Aabb::from_points(&[Vec3::new(-1.0, 2.0, 0.0), Vec3::new(3.0, -2.0, 5.0)]);
         assert_eq!(bb.min, Vec3::new(-1.0, -2.0, 0.0));
         assert_eq!(bb.max, Vec3::new(3.0, 2.0, 5.0));
         assert_eq!(bb.size(), Vec3::new(4.0, 4.0, 5.0));

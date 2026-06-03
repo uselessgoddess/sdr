@@ -19,7 +19,11 @@ use sdr::scene::SceneConfig;
 use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
-#[command(name = "sdr", version, about = "Hydrodynamic simulator of maxillary-sinus irrigation")]
+#[command(
+    name = "sdr",
+    version,
+    about = "Hydrodynamic simulator of maxillary-sinus irrigation"
+)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -112,19 +116,33 @@ fn main() -> Result<()> {
     match cli.cmd {
         Cmd::Init { output } => cmd_init(&output),
         Cmd::GenerateSinus { scene, output } => cmd_generate_sinus(scene.as_deref(), &output),
-        Cmd::Simulate { scene, out_dir, format, preview_px, reconstruct, min_coverage, min_fill, quiet } => {
-            cmd_simulate(SimulateArgs {
-                scene: scene.as_deref(),
-                out_dir: &out_dir,
-                format,
-                preview_px,
-                reconstruct,
-                min_coverage,
-                min_fill,
-                quiet,
-            })
-        }
-        Cmd::Surface { input, output, radius_mm, smoothing_length, cube_size, surface_threshold } => cmd_surface(
+        Cmd::Simulate {
+            scene,
+            out_dir,
+            format,
+            preview_px,
+            reconstruct,
+            min_coverage,
+            min_fill,
+            quiet,
+        } => cmd_simulate(SimulateArgs {
+            scene: scene.as_deref(),
+            out_dir: &out_dir,
+            format,
+            preview_px,
+            reconstruct,
+            min_coverage,
+            min_fill,
+            quiet,
+        }),
+        Cmd::Surface {
+            input,
+            output,
+            radius_mm,
+            smoothing_length,
+            cube_size,
+            surface_threshold,
+        } => cmd_surface(
             &input,
             output.as_deref(),
             radius_mm,
@@ -154,7 +172,10 @@ fn cmd_init(output: &str) -> Result<()> {
 fn cmd_generate_sinus(scene: Option<&str>, output: &str) -> Result<()> {
     let cfg = load_scene(scene)?;
     let built = cfg.build()?;
-    built.cavity_mesh.save(output).with_context(|| format!("saving mesh to {output}"))?;
+    built
+        .cavity_mesh
+        .save(output)
+        .with_context(|| format!("saving mesh to {output}"))?;
     println!(
         "Wrote cavity mesh to {output}  ({} triangles, interior volume {:.2} ml)",
         built.cavity_mesh.triangle_count(),
@@ -179,7 +200,8 @@ fn cmd_simulate(args: SimulateArgs) -> Result<()> {
     let mut built = cfg.build()?;
     let out = Path::new(args.out_dir);
     let frames_dir = out.join("frames");
-    std::fs::create_dir_all(&frames_dir).with_context(|| format!("creating {}", frames_dir.display()))?;
+    std::fs::create_dir_all(&frames_dir)
+        .with_context(|| format!("creating {}", frames_dir.display()))?;
     let preview_dir = out.join("preview");
     if args.preview_px > 0 {
         std::fs::create_dir_all(&preview_dir)?;
@@ -211,8 +233,12 @@ fn cmd_simulate(args: SimulateArgs) -> Result<()> {
         // Particle cloud for this frame.
         let pf = sdr::output::frame_path(&frames_dir, "particles", f, args.format.ext());
         match args.format {
-            ParticleFormat::Vtk => sdr::output::write_points_vtk(&pf, &built.solver.particles.positions)?,
-            ParticleFormat::Xyz => sdr::output::write_points_xyz(&pf, &built.solver.particles.positions)?,
+            ParticleFormat::Vtk => {
+                sdr::output::write_points_vtk(&pf, &built.solver.particles.positions)?
+            }
+            ParticleFormat::Xyz => {
+                sdr::output::write_points_xyz(&pf, &built.solver.particles.positions)?
+            }
         }
         last_frame_file = Some(pf);
 
@@ -241,7 +267,10 @@ fn cmd_simulate(args: SimulateArgs) -> Result<()> {
     metrics.write_json(out.join("metrics.json"))?;
     metrics.write_csv(out.join("metrics.csv"))?;
     let summary = metrics.summary();
-    std::fs::write(out.join("summary.json"), serde_json::to_string_pretty(&summary)?)?;
+    std::fs::write(
+        out.join("summary.json"),
+        serde_json::to_string_pretty(&summary)?,
+    )?;
 
     // Final time-series plot.
     if args.preview_px > 0 {
@@ -250,8 +279,14 @@ fn cmd_simulate(args: SimulateArgs) -> Result<()> {
     }
 
     println!("\n=== irrigation summary ===");
-    println!("peak fill fraction : {:>6.1} %", summary.peak_fill_fraction * 100.0);
-    println!("peak wall coverage : {:>6.1} %  (flushing effectiveness)", summary.peak_wall_coverage * 100.0);
+    println!(
+        "peak fill fraction : {:>6.1} %",
+        summary.peak_fill_fraction * 100.0
+    );
+    println!(
+        "peak wall coverage : {:>6.1} %  (flushing effectiveness)",
+        summary.peak_wall_coverage * 100.0
+    );
     println!(
         "peak membrane load : {:>6.1} mmHg ({:.0} Pa)  (focal jet impingement — over-pressure risk)",
         summary.peak_membrane_pressure_mmhg, summary.peak_membrane_pressure_pa
@@ -261,7 +296,10 @@ fn cmd_simulate(args: SimulateArgs) -> Result<()> {
         summary.mean_membrane_pressure_mmhg, summary.mean_membrane_pressure_pa
     );
     println!("drained volume     : {:>6.2} ml", summary.total_drained_ml);
-    println!("mass balance       : {:>6.3}  (1.0 = conserved)", summary.mass_balance);
+    println!(
+        "mass balance       : {:>6.3}  (1.0 = conserved)",
+        summary.mass_balance
+    );
     println!("outputs written to : {}", out.display());
 
     // Optional surface reconstruction of the final frame.
@@ -278,7 +316,10 @@ fn cmd_simulate(args: SimulateArgs) -> Result<()> {
                 ..ReconParams::default()
             };
             if !args.quiet {
-                eprintln!("Reconstructing final surface (r = {:.4} mm)...", params.particle_radius * 1e3);
+                eprintln!(
+                    "Reconstructing final surface (r = {:.4} mm)...",
+                    params.particle_radius * 1e3
+                );
             }
             recon::reconstruct(input, &output, params)?;
             println!("surface mesh       : {}", output.display());
@@ -288,12 +329,20 @@ fn cmd_simulate(args: SimulateArgs) -> Result<()> {
     // Self-validation gates for CI.
     if let Some(min) = args.min_fill {
         if summary.peak_fill_fraction < min {
-            bail!("peak fill fraction {:.3} < required {:.3}", summary.peak_fill_fraction, min);
+            bail!(
+                "peak fill fraction {:.3} < required {:.3}",
+                summary.peak_fill_fraction,
+                min
+            );
         }
     }
     if let Some(min) = args.min_coverage {
         if summary.peak_wall_coverage < min {
-            bail!("peak wall coverage {:.3} < required {:.3}", summary.peak_wall_coverage, min);
+            bail!(
+                "peak wall coverage {:.3} < required {:.3}",
+                summary.peak_wall_coverage,
+                min
+            );
         }
     }
     Ok(())
@@ -313,7 +362,10 @@ fn cmd_surface(
     let out: PathBuf = match output {
         Some(o) => PathBuf::from(o),
         None => {
-            let stem = Path::new(input).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "particles".into());
+            let stem = Path::new(input)
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "particles".into());
             Path::new(input).with_file_name(format!("{stem}_surface.obj"))
         }
     };

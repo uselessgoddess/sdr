@@ -65,7 +65,12 @@ pub fn write_points_xyz(path: impl AsRef<Path>, positions: &[Vec3]) -> Result<()
 }
 
 /// Format a zero-padded frame filename like `prefix_000123.ext`.
-pub fn frame_path(dir: impl AsRef<Path>, prefix: &str, frame: usize, ext: &str) -> std::path::PathBuf {
+pub fn frame_path(
+    dir: impl AsRef<Path>,
+    prefix: &str,
+    frame: usize,
+    ext: &str,
+) -> std::path::PathBuf {
     dir.as_ref().join(format!("{prefix}_{frame:06}.{ext}"))
 }
 

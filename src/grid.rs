@@ -15,7 +15,13 @@ use crate::math::Vec3;
 
 /// Clamped trilinear interpolation of a scalar array with the given node dims.
 /// `(gx, gy, gz)` are fractional node coordinates.
-pub fn trilinear_sample(arr: &[f64], dims: (usize, usize, usize), gx: f64, gy: f64, gz: f64) -> f64 {
+pub fn trilinear_sample(
+    arr: &[f64],
+    dims: (usize, usize, usize),
+    gx: f64,
+    gy: f64,
+    gz: f64,
+) -> f64 {
     let (nx, ny, nz) = dims;
     let clamp_base = |g: f64, n: usize| -> (usize, f64) {
         if g <= 0.0 {
@@ -142,7 +148,12 @@ impl MacGrid {
     /// World position of the centre of cell `(i,j,k)`.
     #[inline]
     pub fn cell_center(&self, i: usize, j: usize, k: usize) -> Vec3 {
-        self.origin + Vec3::new((i as f64 + 0.5) * self.dx, (j as f64 + 0.5) * self.dx, (k as f64 + 0.5) * self.dx)
+        self.origin
+            + Vec3::new(
+                (i as f64 + 0.5) * self.dx,
+                (j as f64 + 0.5) * self.dx,
+                (k as f64 + 0.5) * self.dx,
+            )
     }
 
     // Fractional grid coordinates for each staggered component. The 0.5 offsets

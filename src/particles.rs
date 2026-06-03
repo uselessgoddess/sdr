@@ -50,7 +50,11 @@ impl ParticleSet {
 
     /// Total kinetic energy assuming unit particle mass (relative measure).
     pub fn kinetic_energy(&self) -> f64 {
-        0.5 * self.velocities.iter().map(|v| v.length_squared()).sum::<f64>()
+        0.5 * self
+            .velocities
+            .iter()
+            .map(|v| v.length_squared())
+            .sum::<f64>()
     }
 }
 

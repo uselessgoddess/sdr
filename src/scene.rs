@@ -81,7 +81,11 @@ impl SinusConfig {
     /// Convert to SI parametric parameters.
     pub fn to_params(&self) -> SinusParams {
         SinusParams {
-            semi_axes: Vec3::new(self.semi_axes_mm[0], self.semi_axes_mm[1], self.semi_axes_mm[2]) * MM,
+            semi_axes: Vec3::new(
+                self.semi_axes_mm[0],
+                self.semi_axes_mm[1],
+                self.semi_axes_mm[2],
+            ) * MM,
             center: Vec3::new(self.center_mm[0], self.center_mm[1], self.center_mm[2]) * MM,
             taper: self.taper,
             bumpiness: self.bumpiness,
@@ -150,7 +154,11 @@ impl FluidConfig {
     pub fn to_params(&self) -> FluidParams {
         FluidParams {
             density: self.density_kg_m3,
-            gravity: Vec3::new(self.gravity_m_s2[0], self.gravity_m_s2[1], self.gravity_m_s2[2]),
+            gravity: Vec3::new(
+                self.gravity_m_s2[0],
+                self.gravity_m_s2[1],
+                self.gravity_m_s2[2],
+            ),
             flip_ratio: self.flip_ratio,
             particles_per_cell: self.particles_per_cell,
         }
@@ -223,7 +231,8 @@ impl SceneConfig {
 
     /// Load a scene from a TOML file.
     pub fn from_toml_file(path: &str) -> Result<Self> {
-        let text = std::fs::read_to_string(path).with_context(|| format!("reading scene file {path}"))?;
+        let text =
+            std::fs::read_to_string(path).with_context(|| format!("reading scene file {path}"))?;
         Self::from_toml_str(&text)
     }
 
@@ -247,7 +256,8 @@ impl SceneConfig {
         // Resolve geometry: parametric or loaded mesh.
         let params = self.sinus.to_params();
         let (cavity_mesh, sdf, auto_needle, auto_outlet) = if let Some(path) = &self.sinus.mesh {
-            let mut mesh = TriMesh::load(path).with_context(|| format!("loading sinus mesh {path}"))?;
+            let mut mesh =
+                TriMesh::load(path).with_context(|| format!("loading sinus mesh {path}"))?;
             // Mesh files are authored in millimetres; bring them to metres.
             mesh.scale(MM);
             let sdf_dx = (self.sinus.model_resolution_mm * MM).min(sim_dx);
@@ -281,7 +291,10 @@ impl SceneConfig {
         let cavity_volume = cavity_mesh.signed_volume().abs();
 
         let mut solver = Solver::new(sdf, sim_dx, fluid, needle);
-        solver.solve = SolveParams { max_iters: self.sim.pcg_iters, tol: self.sim.pcg_tol };
+        solver.solve = SolveParams {
+            max_iters: self.sim.pcg_iters,
+            tol: self.sim.pcg_tol,
+        };
         solver.outlet = match &self.outlet {
             Some(b) => Some(b.to_aabb()),
             None => auto_outlet,
@@ -290,7 +303,13 @@ impl SceneConfig {
         let frames = self.sim.frames.max(1);
         let frame_dt = self.sim.duration_s / frames as f64;
 
-        Ok(BuiltScene { solver, cavity_mesh, cavity_volume, frame_dt, frames })
+        Ok(BuiltScene {
+            solver,
+            cavity_mesh,
+            cavity_volume,
+            frame_dt,
+            frames,
+        })
     }
 
     fn resolve_needle(&self, auto: Option<(Vec3, Vec3)>) -> Result<Needle> {
@@ -302,12 +321,18 @@ impl SceneConfig {
 
         let (tip, axis) = if let Some(t) = self.needle.tip_mm {
             let tip = Vec3::new(t[0], t[1], t[2]) * MM;
-            let axis = Vec3::new(self.needle.axis[0], self.needle.axis[1], self.needle.axis[2]);
+            let axis = Vec3::new(
+                self.needle.axis[0],
+                self.needle.axis[1],
+                self.needle.axis[2],
+            );
             (tip, axis)
         } else if self.needle.auto {
             match auto {
                 Some((tip, axis)) => (tip, axis),
-                None => bail!("needle.auto is set but the sinus is a loaded mesh; specify needle.tip_mm"),
+                None => bail!(
+                    "needle.auto is set but the sinus is a loaded mesh; specify needle.tip_mm"
+                ),
             }
         } else {
             bail!("set either needle.tip_mm or needle.auto = true");
@@ -317,7 +342,12 @@ impl SceneConfig {
         if axis.length() < 0.5 {
             bail!("needle.axis must be a non-zero direction");
         }
-        Ok(Needle { tip, axis, radius, flow_rate })
+        Ok(Needle {
+            tip,
+            axis,
+            radius,
+            flow_rate,
+        })
     }
 }
 
@@ -367,7 +397,9 @@ flow_rate_ml_s = 6.0
         let cfg = SceneConfig::from_toml_str(toml).unwrap();
         let params = cfg.sinus.to_params();
         assert!((params.semi_axes.x - 0.020).abs() < 1e-12);
-        let needle = cfg.resolve_needle(Some((Vec3::ZERO, Vec3::new(0.0, 1.0, 0.0)))).unwrap();
+        let needle = cfg
+            .resolve_needle(Some((Vec3::ZERO, Vec3::new(0.0, 1.0, 0.0))))
+            .unwrap();
         assert!((needle.radius - 0.0005).abs() < 1e-12);
         assert!((needle.flow_rate - 6.0e-6).abs() < 1e-18);
     }

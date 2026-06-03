@@ -41,12 +41,26 @@ impl SlicePlane {
     /// "side view" through the socket). `slab` is the half-thickness of the
     /// particle band drawn around the plane.
     pub fn xy(slice: f64, slab: f64) -> Self {
-        SlicePlane { hax: 0, vax: 1, oax: 2, slice, slab, flip_v: true }
+        SlicePlane {
+            hax: 0,
+            vax: 1,
+            oax: 2,
+            slice,
+            slab,
+            flip_v: true,
+        }
     }
 
     /// Top-down view in the x–z plane at `y = slice`.
     pub fn xz(slice: f64, slab: f64) -> Self {
-        SlicePlane { hax: 0, vax: 2, oax: 1, slice, slab, flip_v: false }
+        SlicePlane {
+            hax: 0,
+            vax: 2,
+            oax: 1,
+            slice,
+            slab,
+            flip_v: false,
+        }
     }
 }
 
@@ -63,9 +77,15 @@ pub fn render_slice(solver: &Solver, plane: &SlicePlane, target_px: u32, vmax: f
     let hm = (mx[plane.vax] - mn[plane.vax]).max(1e-9);
 
     let (w, h) = if wm >= hm {
-        (target_px.max(1), (target_px as f64 * hm / wm).round().max(1.0) as u32)
+        (
+            target_px.max(1),
+            (target_px as f64 * hm / wm).round().max(1.0) as u32,
+        )
     } else {
-        ((target_px as f64 * wm / hm).round().max(1.0) as u32, target_px.max(1))
+        (
+            (target_px as f64 * wm / hm).round().max(1.0) as u32,
+            target_px.max(1),
+        )
     };
 
     let mut img = RgbImage::from_pixel(w, h, BG);
@@ -75,7 +95,11 @@ pub fn render_slice(solver: &Solver, plane: &SlicePlane, target_px: u32, vmax: f
     for py in 0..h {
         for px in 0..w {
             let p = self_world(plane, mn, mx, wm, hm, w, h, px, py);
-            let color = if solver.solid.sample(p) < 0.0 { INTERIOR } else { WALL };
+            let color = if solver.solid.sample(p) < 0.0 {
+                INTERIOR
+            } else {
+                WALL
+            };
             img.put_pixel(px, py, color);
         }
     }
@@ -92,8 +116,17 @@ pub fn render_slice(solver: &Solver, plane: &SlicePlane, target_px: u32, vmax: f
     };
 
     // Particles within the slab, coloured by speed.
-    let vmax = if vmax > 0.0 { vmax } else { solver.max_speed().max(1e-6) };
-    for (p, v) in solver.particles.positions.iter().zip(&solver.particles.velocities) {
+    let vmax = if vmax > 0.0 {
+        vmax
+    } else {
+        solver.max_speed().max(1e-6)
+    };
+    for (p, v) in solver
+        .particles
+        .positions
+        .iter()
+        .zip(&solver.particles.velocities)
+    {
         if (p.to_array()[plane.oax] - plane.slice).abs() > plane.slab {
             continue;
         }
@@ -165,7 +198,11 @@ pub fn render_timeseries(frames: &[FrameMetrics], width: u32, height: u32) -> Rg
         return img;
     }
     let n = frames.len();
-    let peak_p = frames.iter().map(|m| m.peak_wall_pressure_pa).fold(0.0_f64, f64::max).max(1e-9);
+    let peak_p = frames
+        .iter()
+        .map(|m| m.peak_wall_pressure_pa)
+        .fold(0.0_f64, f64::max)
+        .max(1e-9);
     let map = |i: usize, val: f64| -> (i64, i64) {
         let fx = x0 as f64 + (x1 - x0) as f64 * i as f64 / (n - 1) as f64;
         let v = val.clamp(0.0, 1.0);
@@ -173,9 +210,18 @@ pub fn render_timeseries(frames: &[FrameMetrics], width: u32, height: u32) -> Rg
         (fx as i64, fy as i64)
     };
     let series = [
-        (Rgb([40, 90, 220]), Box::new(|m: &FrameMetrics| m.fill_fraction) as Box<dyn Fn(&FrameMetrics) -> f64>),
-        (Rgb([30, 160, 60]), Box::new(|m: &FrameMetrics| m.wall_coverage)),
-        (Rgb([210, 60, 50]), Box::new(move |m: &FrameMetrics| m.peak_wall_pressure_pa / peak_p)),
+        (
+            Rgb([40, 90, 220]),
+            Box::new(|m: &FrameMetrics| m.fill_fraction) as Box<dyn Fn(&FrameMetrics) -> f64>,
+        ),
+        (
+            Rgb([30, 160, 60]),
+            Box::new(|m: &FrameMetrics| m.wall_coverage),
+        ),
+        (
+            Rgb([210, 60, 50]),
+            Box::new(move |m: &FrameMetrics| m.peak_wall_pressure_pa / peak_p),
+        ),
     ];
     for (color, f) in &series {
         for i in 1..n {

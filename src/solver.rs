@@ -199,8 +199,13 @@ impl Solver {
         self.p2g();
         self.save_grid();
         self.add_forces(dt);
-        let (report, pressure) =
-            pressure::project_capturing(&mut self.grid, &self.cells, self.fluid.density, dt, self.solve);
+        let (report, pressure) = pressure::project_capturing(
+            &mut self.grid,
+            &self.cells,
+            self.fluid.density,
+            dt,
+            self.solve,
+        );
         self.last_pcg_iters = report.iters;
         self.pressure = pressure;
         self.extrapolate_velocities();
@@ -234,10 +239,8 @@ impl Solver {
             let r = self.needle.radius * self.rng.unit().sqrt();
             let theta = 2.0 * std::f64::consts::PI * self.rng.unit();
             let along = (self.rng.unit() - 0.5) * self.grid.dx;
-            let pos = self.needle.tip
-                + e1 * (r * theta.cos())
-                + e2 * (r * theta.sin())
-                + axis * along;
+            let pos =
+                self.needle.tip + e1 * (r * theta.cos()) + e2 * (r * theta.sin()) + axis * along;
             self.particles.push(pos, vel);
         }
     }
@@ -282,7 +285,12 @@ impl Solver {
         let mut wv = vec![0.0f64; self.grid.v.len()];
         let mut ww = vec![0.0f64; self.grid.w.len()];
 
-        for (p, vel) in self.particles.positions.iter().zip(&self.particles.velocities) {
+        for (p, vel) in self
+            .particles
+            .positions
+            .iter()
+            .zip(&self.particles.velocities)
+        {
             let (gx, gy, gz) = self.grid.u_coords(*p);
             trilinear_scatter(&mut self.grid.u, &mut wu, ud, gx, gy, gz, vel.x);
             let (gx, gy, gz) = self.grid.v_coords(*p);
@@ -367,7 +375,12 @@ impl Solver {
         let vd = self.grid.v_dims();
         let wd = self.grid.w_dims();
 
-        for (p, vel) in self.particles.positions.iter().zip(self.particles.velocities.iter_mut()) {
+        for (p, vel) in self
+            .particles
+            .positions
+            .iter()
+            .zip(self.particles.velocities.iter_mut())
+        {
             // PIC: fresh interpolation of the new field.
             let pic = self.grid.velocity_at(*p);
             // FLIP: old particle velocity plus the interpolated change.
@@ -499,7 +512,11 @@ impl Solver {
 
 /// Build two unit vectors orthogonal to `n` (and to each other).
 fn orthonormal_basis(n: Vec3) -> (Vec3, Vec3) {
-    let a = if n.x.abs() < 0.9 { Vec3::new(1.0, 0.0, 0.0) } else { Vec3::new(0.0, 1.0, 0.0) };
+    let a = if n.x.abs() < 0.9 {
+        Vec3::new(1.0, 0.0, 0.0)
+    } else {
+        Vec3::new(0.0, 1.0, 0.0)
+    };
     let e1 = n.cross(a).normalize_or_zero();
     let e2 = n.cross(e1).normalize_or_zero();
     (e1, e2)
@@ -584,8 +601,16 @@ mod tests {
         // gives plenty of particles without driving up the sub-step count.
         let sdf = Sdf::from_mesh(&mesh, 0.0025, 0.006);
         let (tip, axis) = params.suggested_needle();
-        let needle = Needle { tip, axis, radius: 0.0006, flow_rate: 5.0e-6 };
-        let fluid = FluidParams { particles_per_cell: 16, ..FluidParams::default() };
+        let needle = Needle {
+            tip,
+            axis,
+            radius: 0.0006,
+            flow_rate: 5.0e-6,
+        };
+        let fluid = FluidParams {
+            particles_per_cell: 16,
+            ..FluidParams::default()
+        };
         let mut s = Solver::new(sdf, 0.0025, fluid, needle);
         // Drain at the very bottom of the socket.
         let (sx, sz) = params.socket_xz;
@@ -599,7 +624,12 @@ mod tests {
 
     #[test]
     fn jet_speed_from_flow_rate() {
-        let n = Needle { tip: Vec3::ZERO, axis: Vec3::new(0.0, 1.0, 0.0), radius: 0.001, flow_rate: 1e-6 };
+        let n = Needle {
+            tip: Vec3::ZERO,
+            axis: Vec3::new(0.0, 1.0, 0.0),
+            radius: 0.001,
+            flow_rate: 1e-6,
+        };
         // 1 ml/s through r=1mm: v = Q/(pi r^2) = 1e-6 / (pi*1e-6) = 1/pi.
         assert!((n.jet_speed() - 1.0 / std::f64::consts::PI).abs() < 1e-9);
     }
@@ -633,7 +663,10 @@ mod tests {
             .iter()
             .map(|&p| s.solid.sample(p))
             .fold(f64::NEG_INFINITY, f64::max);
-        assert!(max_phi < s.solid.dx, "a particle sits inside the wall (phi = {max_phi})");
+        assert!(
+            max_phi < s.solid.dx,
+            "a particle sits inside the wall (phi = {max_phi})"
+        );
     }
 
     /// Two independent runs of the same scene must agree bit-for-bit. This is
@@ -654,14 +687,28 @@ mod tests {
         let a = run();
         let b = run();
 
-        assert_eq!(a.particles.len(), b.particles.len(), "particle count diverged");
+        assert_eq!(
+            a.particles.len(),
+            b.particles.len(),
+            "particle count diverged"
+        );
         // Pressure field: compare raw bit patterns, not approximate equality.
         assert_eq!(a.pressure.len(), b.pressure.len());
         for (idx, (&pa, &pb)) in a.pressure.iter().zip(&b.pressure).enumerate() {
-            assert_eq!(pa.to_bits(), pb.to_bits(), "pressure[{idx}] differs: {pa} vs {pb}");
+            assert_eq!(
+                pa.to_bits(),
+                pb.to_bits(),
+                "pressure[{idx}] differs: {pa} vs {pb}"
+            );
         }
         // Particle positions: every component identical down to the last bit.
-        for (idx, (&qa, &qb)) in a.particles.positions.iter().zip(&b.particles.positions).enumerate() {
+        for (idx, (&qa, &qb)) in a
+            .particles
+            .positions
+            .iter()
+            .zip(&b.particles.positions)
+            .enumerate()
+        {
             assert_eq!(qa.x.to_bits(), qb.x.to_bits(), "particle[{idx}].x differs");
             assert_eq!(qa.y.to_bits(), qb.y.to_bits(), "particle[{idx}].y differs");
             assert_eq!(qa.z.to_bits(), qb.z.to_bits(), "particle[{idx}].z differs");

@@ -104,7 +104,11 @@ impl TriMesh {
     /// Load a mesh from a file, dispatching on extension (`.obj` / `.stl`).
     pub fn load(path: impl AsRef<Path>) -> Result<TriMesh> {
         let path = path.as_ref();
-        match path.extension().and_then(|e| e.to_str()).map(str::to_lowercase) {
+        match path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_lowercase)
+        {
             Some(ext) if ext == "obj" => Self::load_obj(path),
             Some(ext) if ext == "stl" => Self::load_stl(path),
             other => bail!("unsupported mesh extension: {:?} (use .obj or .stl)", other),
@@ -114,7 +118,11 @@ impl TriMesh {
     /// Save a mesh to a file, dispatching on extension (`.obj` / `.stl`).
     pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
         let path = path.as_ref();
-        match path.extension().and_then(|e| e.to_str()).map(str::to_lowercase) {
+        match path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_lowercase)
+        {
             Some(ext) if ext == "obj" => self.save_obj(path),
             Some(ext) if ext == "stl" => self.save_stl(path),
             other => bail!("unsupported mesh extension: {:?} (use .obj or .stl)", other),
@@ -183,10 +191,16 @@ impl TriMesh {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).ok();
         }
-        let file = File::create(path).with_context(|| format!("creating OBJ {}", path.display()))?;
+        let file =
+            File::create(path).with_context(|| format!("creating OBJ {}", path.display()))?;
         let mut w = BufWriter::new(file);
         writeln!(w, "# sdr parametric sinus mesh")?;
-        writeln!(w, "# vertices: {} faces: {}", self.vertices.len(), self.indices.len())?;
+        writeln!(
+            w,
+            "# vertices: {} faces: {}",
+            self.vertices.len(),
+            self.indices.len()
+        )?;
         for v in &self.vertices {
             writeln!(w, "v {} {} {}", v.x, v.y, v.z)?;
         }
@@ -201,7 +215,8 @@ impl TriMesh {
     /// detect and reject it with a clear message.)
     pub fn load_stl(path: impl AsRef<Path>) -> Result<TriMesh> {
         let path = path.as_ref();
-        let mut file = File::open(path).with_context(|| format!("opening STL {}", path.display()))?;
+        let mut file =
+            File::open(path).with_context(|| format!("opening STL {}", path.display()))?;
         let mut buf = Vec::new();
         file.read_to_end(&mut buf)?;
         if buf.len() < 84 {
@@ -213,20 +228,26 @@ impl TriMesh {
         let tri_count = u32::from_le_bytes([buf[80], buf[81], buf[82], buf[83]]) as usize;
         let expected = 84 + tri_count * 50;
         if buf.len() < expected {
-            bail!("binary STL truncated: expected {expected} bytes, got {}", buf.len());
+            bail!(
+                "binary STL truncated: expected {expected} bytes, got {}",
+                buf.len()
+            );
         }
         let mut vertices = Vec::with_capacity(tri_count * 3);
         let mut indices = Vec::with_capacity(tri_count);
-        let read_f32 = |b: &[u8], o: usize| {
-            f32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]) as f64
-        };
+        let read_f32 =
+            |b: &[u8], o: usize| f32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]) as f64;
         for t in 0..tri_count {
             let base = 84 + t * 50;
             // Skip the 12-byte normal; recompute from geometry when needed.
             let mut tri = [0u32; 3];
             for (j, slot) in tri.iter_mut().enumerate() {
                 let o = base + 12 + j * 12;
-                let v = Vec3::new(read_f32(&buf, o), read_f32(&buf, o + 4), read_f32(&buf, o + 8));
+                let v = Vec3::new(
+                    read_f32(&buf, o),
+                    read_f32(&buf, o + 4),
+                    read_f32(&buf, o + 8),
+                );
                 *slot = vertices.len() as u32;
                 vertices.push(v);
             }
@@ -241,7 +262,8 @@ impl TriMesh {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).ok();
         }
-        let file = File::create(path).with_context(|| format!("creating STL {}", path.display()))?;
+        let file =
+            File::create(path).with_context(|| format!("creating STL {}", path.display()))?;
         let mut w = BufWriter::new(file);
         let header = [0u8; 80];
         w.write_all(&header)?;

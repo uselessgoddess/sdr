@@ -57,7 +57,11 @@ pub fn available() -> bool {
 /// Run `splashsurf reconstruct <input> -o <output> ...`.
 ///
 /// Errors if the binary is missing or the reconstruction fails.
-pub fn reconstruct(input: impl AsRef<Path>, output: impl AsRef<Path>, params: ReconParams) -> Result<()> {
+pub fn reconstruct(
+    input: impl AsRef<Path>,
+    output: impl AsRef<Path>,
+    params: ReconParams,
+) -> Result<()> {
     if params.particle_radius <= 0.0 {
         bail!("particle_radius must be positive (try recon::radius_for_volume)");
     }

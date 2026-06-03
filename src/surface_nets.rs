@@ -52,18 +52,24 @@ pub fn surface_nets(
     field: impl Fn(Vec3) -> f64 + Sync,
 ) -> TriMesh {
     let (nx, ny, nz) = dims;
-    assert!(nx >= 2 && ny >= 2 && nz >= 2, "surface_nets needs at least 2 nodes per axis");
+    assert!(
+        nx >= 2 && ny >= 2 && nz >= 2,
+        "surface_nets needs at least 2 nodes per axis"
+    );
 
     // 1. Sample the field at every node (parallel over z-slices).
     let mut values = vec![0.0f64; nx * ny * nz];
-    values.par_chunks_mut(nx * ny).enumerate().for_each(|(k, slice)| {
-        for j in 0..ny {
-            for i in 0..nx {
-                let p = origin + Vec3::new(i as f64 * dx, j as f64 * dx, k as f64 * dx);
-                slice[j * nx + i] = field(p);
+    values
+        .par_chunks_mut(nx * ny)
+        .enumerate()
+        .for_each(|(k, slice)| {
+            for j in 0..ny {
+                for i in 0..nx {
+                    let p = origin + Vec3::new(i as f64 * dx, j as f64 * dx, k as f64 * dx);
+                    slice[j * nx + i] = field(p);
+                }
             }
-        }
-    });
+        });
     let node = |i: usize, j: usize, k: usize| values[(k * ny + j) * nx + i];
 
     // 2. One vertex per straddling cell.
@@ -101,7 +107,11 @@ pub fn surface_nets(
                 }
                 let local = sum / crossings.len() as f64;
                 let world = origin
-                    + Vec3::new((i as f64 + local.x) * dx, (j as f64 + local.y) * dx, (k as f64 + local.z) * dx);
+                    + Vec3::new(
+                        (i as f64 + local.x) * dx,
+                        (j as f64 + local.y) * dx,
+                        (k as f64 + local.z) * dx,
+                    );
                 cell_vertex[cell_idx(i, j, k)] = vertices.len() as u32;
                 vertices.push(world);
             }
@@ -133,7 +143,11 @@ pub fn surface_nets(
                             get(i, j, k),
                             get(i, j - 1, k),
                         ];
-                        let desired = if v0 < v1 { Vec3::new(1.0, 0.0, 0.0) } else { Vec3::new(-1.0, 0.0, 0.0) };
+                        let desired = if v0 < v1 {
+                            Vec3::new(1.0, 0.0, 0.0)
+                        } else {
+                            Vec3::new(-1.0, 0.0, 0.0)
+                        };
                         emit_quad(&ring, desired, &vertices, &mut indices);
                     }
                 }
@@ -147,7 +161,11 @@ pub fn surface_nets(
                             get(i, j, k),
                             get(i - 1, j, k),
                         ];
-                        let desired = if v0 < v1 { Vec3::new(0.0, 1.0, 0.0) } else { Vec3::new(0.0, -1.0, 0.0) };
+                        let desired = if v0 < v1 {
+                            Vec3::new(0.0, 1.0, 0.0)
+                        } else {
+                            Vec3::new(0.0, -1.0, 0.0)
+                        };
                         emit_quad(&ring, desired, &vertices, &mut indices);
                     }
                 }
@@ -161,7 +179,11 @@ pub fn surface_nets(
                             get(i, j, k),
                             get(i - 1, j, k),
                         ];
-                        let desired = if v0 < v1 { Vec3::new(0.0, 0.0, 1.0) } else { Vec3::new(0.0, 0.0, -1.0) };
+                        let desired = if v0 < v1 {
+                            Vec3::new(0.0, 0.0, 1.0)
+                        } else {
+                            Vec3::new(0.0, 0.0, -1.0)
+                        };
                         emit_quad(&ring, desired, &vertices, &mut indices);
                     }
                 }
@@ -174,7 +196,12 @@ pub fn surface_nets(
 
 /// Emit two triangles for a quad given as a 4-vertex ring, orienting them so
 /// the geometric normal agrees with `desired`.
-fn emit_quad(ring: &[Option<u32>; 4], desired: Vec3, vertices: &[Vec3], indices: &mut Vec<[u32; 3]>) {
+fn emit_quad(
+    ring: &[Option<u32>; 4],
+    desired: Vec3,
+    vertices: &[Vec3],
+    indices: &mut Vec<[u32; 3]>,
+) {
     // All four cells must have produced a vertex; on a closed surface they do.
     let (a, b, c, d) = match (ring[0], ring[1], ring[2], ring[3]) {
         (Some(a), Some(b), Some(c), Some(d)) => (a, b, c, d),
@@ -209,7 +236,10 @@ mod tests {
         // Outward winding => positive signed volume close to (4/3)pi r^3.
         let vol = mesh.signed_volume();
         let exact = 4.0 / 3.0 * std::f64::consts::PI * r.powi(3);
-        assert!(vol > 0.0, "winding should be outward (positive volume), got {vol}");
+        assert!(
+            vol > 0.0,
+            "winding should be outward (positive volume), got {vol}"
+        );
         assert_relative_eq!(vol, exact, epsilon = 0.15);
         // Surface area close to 4 pi r^2.
         let area = mesh.surface_area();

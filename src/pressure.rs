@@ -42,7 +42,10 @@ pub struct SolveParams {
 
 impl Default for SolveParams {
     fn default() -> Self {
-        SolveParams { max_iters: 200, tol: 1e-6 }
+        SolveParams {
+            max_iters: 200,
+            tol: 1e-6,
+        }
     }
 }
 
@@ -82,7 +85,13 @@ impl Laplacian {
 /// On return the face velocities of `grid` are (approximately) divergence-free
 /// inside the fluid, faces touching solids carry the (zero) wall velocity, and
 /// the report gives the iteration count and final residual.
-pub fn project(grid: &mut MacGrid, cells: &[Cell], rho: f64, dt: f64, params: SolveParams) -> SolveReport {
+pub fn project(
+    grid: &mut MacGrid,
+    cells: &[Cell],
+    rho: f64,
+    dt: f64,
+    params: SolveParams,
+) -> SolveReport {
     project_capturing(grid, cells, rho, dt, params).0
 }
 
@@ -99,7 +108,11 @@ pub fn project_capturing(
 ) -> (SolveReport, Vec<f64>) {
     let (nx, ny, nz) = (grid.nx, grid.ny, grid.nz);
     let n = nx * ny * nz;
-    assert_eq!(cells.len(), n, "cell classification must cover the whole grid");
+    assert_eq!(
+        cells.len(),
+        n,
+        "cell classification must cover the whole grid"
+    );
 
     let cell = |i: usize, j: usize, k: usize| cells[(k * ny + j) * nx + i];
 
@@ -188,7 +201,13 @@ pub fn project_capturing(
     let coef = dt / (rho * grid.dx);
     apply_pressure_gradient(grid, cells, &report.pressure, coef);
 
-    (SolveReport { iters: report.iters, residual: report.residual }, report.pressure)
+    (
+        SolveReport {
+            iters: report.iters,
+            residual: report.residual,
+        },
+        report.pressure,
+    )
 }
 
 /// Set every face touching a solid (or the domain boundary) to the static wall
@@ -297,7 +316,11 @@ fn pcg(a: &Laplacian, cells: &[Cell], b: &[f64], params: SolveParams) -> PcgResu
 
     let mut residual = inf_norm(b);
     if residual <= params.tol {
-        return PcgResult { pressure: p, iters: 0, residual };
+        return PcgResult {
+            pressure: p,
+            iters: 0,
+            residual,
+        };
     }
 
     let precon = build_mic0(a, cells);
@@ -319,7 +342,9 @@ fn pcg(a: &Laplacian, cells: &[Cell], b: &[f64], params: SolveParams) -> PcgResu
         let alpha = sigma / denom;
         // p += alpha s ; r -= alpha As
         p.par_iter_mut().zip(&s).for_each(|(p, &s)| *p += alpha * s);
-        r.par_iter_mut().zip(&as_).for_each(|(r, &a)| *r -= alpha * a);
+        r.par_iter_mut()
+            .zip(&as_)
+            .for_each(|(r, &a)| *r -= alpha * a);
 
         residual = inf_norm(&r);
         if residual <= params.tol {
@@ -330,51 +355,59 @@ fn pcg(a: &Laplacian, cells: &[Cell], b: &[f64], params: SolveParams) -> PcgResu
         let sigma_new = dot(&z, &r);
         let beta = sigma_new / sigma;
         // s = z + beta s
-        s.par_iter_mut().zip(&z).for_each(|(s, &z)| *s = z + beta * *s);
+        s.par_iter_mut()
+            .zip(&z)
+            .for_each(|(s, &z)| *s = z + beta * *s);
         sigma = sigma_new;
     }
 
-    PcgResult { pressure: p, iters, residual }
+    PcgResult {
+        pressure: p,
+        iters,
+        residual,
+    }
 }
 
 /// Sparse matrix-vector product `out = A·x` over fluid cells.
 fn apply_a(a: &Laplacian, cells: &[Cell], x: &[f64], out: &mut [f64]) {
     let (nx, ny, nz) = (a.nx, a.ny, a.nz);
-    out.par_chunks_mut(nx * ny).enumerate().for_each(|(k, slice)| {
-        for j in 0..ny {
-            for i in 0..nx {
-                let c = (k * ny + j) * nx + i;
-                let local = j * nx + i;
-                if cells[c] != Cell::Fluid {
-                    slice[local] = 0.0;
-                    continue;
+    out.par_chunks_mut(nx * ny)
+        .enumerate()
+        .for_each(|(k, slice)| {
+            for j in 0..ny {
+                for i in 0..nx {
+                    let c = (k * ny + j) * nx + i;
+                    let local = j * nx + i;
+                    if cells[c] != Cell::Fluid {
+                        slice[local] = 0.0;
+                        continue;
+                    }
+                    let mut v = a.diag[c] * x[c];
+                    // +x / −x
+                    if i + 1 < nx {
+                        v += a.plus_x[c] * x[a.idx(i + 1, j, k)];
+                    }
+                    if i >= 1 {
+                        v += a.plus_x[a.idx(i - 1, j, k)] * x[a.idx(i - 1, j, k)];
+                    }
+                    // +y / −y
+                    if j + 1 < ny {
+                        v += a.plus_y[c] * x[a.idx(i, j + 1, k)];
+                    }
+                    if j >= 1 {
+                        v += a.plus_y[a.idx(i, j - 1, k)] * x[a.idx(i, j - 1, k)];
+                    }
+                    // +z / −z
+                    if k + 1 < nz {
+                        v += a.plus_z[c] * x[a.idx(i, j, k + 1)];
+                    }
+                    if k >= 1 {
+                        v += a.plus_z[a.idx(i, j, k - 1)] * x[a.idx(i, j, k - 1)];
+                    }
+                    slice[local] = v;
                 }
-                let mut v = a.diag[c] * x[c];
-                // +x / −x
-                if i + 1 < nx {
-                    v += a.plus_x[c] * x[a.idx(i + 1, j, k)];
-                }
-                if i >= 1 {
-                    v += a.plus_x[a.idx(i - 1, j, k)] * x[a.idx(i - 1, j, k)];
-                }
-                // +y / −y
-                if j + 1 < ny {
-                    v += a.plus_y[c] * x[a.idx(i, j + 1, k)];
-                }
-                if j >= 1 {
-                    v += a.plus_y[a.idx(i, j - 1, k)] * x[a.idx(i, j - 1, k)];
-                }
-                // +z / −z
-                if k + 1 < nz {
-                    v += a.plus_z[c] * x[a.idx(i, j, k + 1)];
-                }
-                if k >= 1 {
-                    v += a.plus_z[a.idx(i, j, k - 1)] * x[a.idx(i, j, k - 1)];
-                }
-                slice[local] = v;
             }
-        }
-    });
+        });
 }
 
 /// Build the MIC(0) preconditioner factor (one reciprocal-sqrt per fluid cell).
@@ -542,7 +575,9 @@ fn dot(a: &[f64], b: &[f64]) -> f64 {
 }
 
 fn inf_norm(a: &[f64]) -> f64 {
-    a.par_iter().fold(|| 0.0f64, |m, &x| m.max(x.abs())).reduce(|| 0.0, f64::max)
+    a.par_iter()
+        .fold(|| 0.0f64, |m, &x| m.max(x.abs()))
+        .reduce(|| 0.0, f64::max)
 }
 
 #[cfg(test)]
@@ -557,20 +592,25 @@ mod tests {
         let mut g = MacGrid::new(12, 12, 12, 0.01, Vec3::ZERO);
         fill_divergent(&mut g);
         let cells = classify_box(&g);
-        let solve = SolveParams { max_iters: 400, tol: 1e-12 };
+        let solve = SolveParams {
+            max_iters: 400,
+            tol: 1e-12,
+        };
         // First projection makes the field divergence-free.
         project(&mut g, &cells, 1000.0, 1e-3, solve);
         let (u1, v1, w1) = (g.u.clone(), g.v.clone(), g.w.clone());
         // Second projection should be a no-op.
         project(&mut g, &cells, 1000.0, 1e-3, solve);
-        let max_change = g
-            .u
-            .iter()
-            .zip(&u1)
-            .chain(g.v.iter().zip(&v1))
-            .chain(g.w.iter().zip(&w1))
-            .fold(0.0f64, |m, (a, b)| m.max((a - b).abs()));
-        assert!(max_change < 1e-7, "projection not idempotent: changed by {max_change}");
+        let max_change =
+            g.u.iter()
+                .zip(&u1)
+                .chain(g.v.iter().zip(&v1))
+                .chain(g.w.iter().zip(&w1))
+                .fold(0.0f64, |m, (a, b)| m.max((a - b).abs()));
+        assert!(
+            max_change < 1e-7,
+            "projection not idempotent: changed by {max_change}"
+        );
     }
 
     /// Fill a grid with an arbitrary, strongly divergent velocity field.
@@ -624,7 +664,16 @@ mod tests {
             }
         }
         let cells = classify_box(&g);
-        let rep = project(&mut g, &cells, 1000.0, 1e-3, SolveParams { max_iters: 400, tol: 1e-9 });
+        let rep = project(
+            &mut g,
+            &cells,
+            1000.0,
+            1e-3,
+            SolveParams {
+                max_iters: 400,
+                tol: 1e-9,
+            },
+        );
 
         // Check max divergence over interior fluid cells.
         let mut max_div = 0.0f64;
@@ -638,7 +687,11 @@ mod tests {
                 }
             }
         }
-        assert!(max_div < 1e-5, "max interior divergence after projection: {max_div} (iters {})", rep.iters);
+        assert!(
+            max_div < 1e-5,
+            "max interior divergence after projection: {max_div} (iters {})",
+            rep.iters
+        );
     }
 
     /// The pressure solve must be bit-for-bit reproducible across runs. The CG
@@ -648,7 +701,10 @@ mod tests {
     /// size spans several reduction chunks, exercising the parallel path.
     #[test]
     fn pressure_solve_is_bit_reproducible() {
-        let solve = SolveParams { max_iters: 400, tol: 1e-12 };
+        let solve = SolveParams {
+            max_iters: 400,
+            tol: 1e-12,
+        };
         let run = || {
             let mut g = MacGrid::new(24, 24, 24, 0.01, Vec3::ZERO);
             fill_divergent(&mut g);
@@ -659,7 +715,11 @@ mod tests {
         let pb = run();
         assert_eq!(pa.len(), pb.len());
         for (idx, (&a, &b)) in pa.iter().zip(&pb).enumerate() {
-            assert_eq!(a.to_bits(), b.to_bits(), "pressure[{idx}] not reproducible: {a} vs {b}");
+            assert_eq!(
+                a.to_bits(),
+                b.to_bits(),
+                "pressure[{idx}] not reproducible: {a} vs {b}"
+            );
         }
     }
 
@@ -670,7 +730,8 @@ mod tests {
         for k in 0..nz {
             for j in 0..ny {
                 for i in 0..nx {
-                    let edge = i == 0 || j == 0 || k == 0 || i == nx - 1 || j == ny - 1 || k == nz - 1;
+                    let edge =
+                        i == 0 || j == 0 || k == 0 || i == nx - 1 || j == ny - 1 || k == nz - 1;
                     if edge {
                         cells[(k * ny + j) * nx + i] = Cell::Solid;
                     }

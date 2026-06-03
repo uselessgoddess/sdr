@@ -58,7 +58,9 @@ impl Sdf {
         let origin = bounds.min;
 
         // Pre-extract triangle vertices for cache-friendly iteration.
-        let tris: Vec<[Vec3; 3]> = (0..mesh.triangle_count()).map(|t| mesh.triangle(t)).collect();
+        let tris: Vec<[Vec3; 3]> = (0..mesh.triangle_count())
+            .map(|t| mesh.triangle(t))
+            .collect();
 
         let mut data = vec![0.0f64; nx * ny * nz];
         // Parallelise over z-slices: each slice is independent.
@@ -67,30 +69,50 @@ impl Sdf {
             .for_each(|(k, slice)| {
                 for j in 0..ny {
                     for i in 0..nx {
-                        let p = origin
-                            + Vec3::new(i as f64 * dx, j as f64 * dx, k as f64 * dx);
+                        let p = origin + Vec3::new(i as f64 * dx, j as f64 * dx, k as f64 * dx);
                         slice[j * nx + i] = signed_distance_to_mesh(p, &tris);
                     }
                 }
             });
 
-        Sdf { origin, dx, nx, ny, nz, data }
+        Sdf {
+            origin,
+            dx,
+            nx,
+            ny,
+            nz,
+            data,
+        }
     }
 
     /// Construct from an analytic signed-distance function (used in tests and
     /// for simple primitive domains).
-    pub fn from_fn(origin: Vec3, dx: f64, dims: (usize, usize, usize), f: impl Fn(Vec3) -> f64 + Sync) -> Sdf {
+    pub fn from_fn(
+        origin: Vec3,
+        dx: f64,
+        dims: (usize, usize, usize),
+        f: impl Fn(Vec3) -> f64 + Sync,
+    ) -> Sdf {
         let (nx, ny, nz) = dims;
         let mut data = vec![0.0; nx * ny * nz];
-        data.par_chunks_mut(nx * ny).enumerate().for_each(|(k, slice)| {
-            for j in 0..ny {
-                for i in 0..nx {
-                    let p = origin + Vec3::new(i as f64 * dx, j as f64 * dx, k as f64 * dx);
-                    slice[j * nx + i] = f(p);
+        data.par_chunks_mut(nx * ny)
+            .enumerate()
+            .for_each(|(k, slice)| {
+                for j in 0..ny {
+                    for i in 0..nx {
+                        let p = origin + Vec3::new(i as f64 * dx, j as f64 * dx, k as f64 * dx);
+                        slice[j * nx + i] = f(p);
+                    }
                 }
-            }
-        });
-        Sdf { origin, dx, nx, ny, nz, data }
+            });
+        Sdf {
+            origin,
+            dx,
+            nx,
+            ny,
+            nz,
+            data,
+        }
     }
 
     /// World-space bounds covered by the field's nodes.
@@ -245,8 +267,7 @@ fn solid_angle(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> f64 {
         return 0.0;
     }
     let numerator = av.dot(bv.cross(cv));
-    let denominator =
-        la * lb * lc + av.dot(bv) * lc + bv.dot(cv) * la + cv.dot(av) * lb;
+    let denominator = la * lb * lc + av.dot(bv) * lc + bv.dot(cv) * la + cv.dot(av) * lb;
     2.0 * numerator.atan2(denominator)
 }
 
@@ -301,8 +322,9 @@ mod tests {
             [1, 6, 5],
         ];
         let mesh = TriMesh::new(v, f);
-        let tris: Vec<[Vec3; 3]> =
-            (0..mesh.triangle_count()).map(|t| mesh.triangle(t)).collect();
+        let tris: Vec<[Vec3; 3]> = (0..mesh.triangle_count())
+            .map(|t| mesh.triangle(t))
+            .collect();
         // Centre is inside: distance to nearest wall is 1, sign negative.
         let d = signed_distance_to_mesh(Vec3::ZERO, &tris);
         assert_relative_eq!(d, -1.0, epsilon = 1e-9);

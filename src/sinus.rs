@@ -99,11 +99,10 @@ impl SinusParams {
             * (0.6 * (4.0 * q.x / a.x).sin() * (3.0 * q.z / a.z).cos()
                 + 0.4 * (5.0 * q.y / a.y + 1.3).sin());
 
-        let body = ((q.x / (a.x * scale)).powi(2)
-            + (q.y / a.y).powi(2)
-            + (q.z / (a.z * scale)).powi(2))
-        .sqrt()
-            - (1.0 + bump);
+        let body =
+            ((q.x / (a.x * scale)).powi(2) + (q.y / a.y).powi(2) + (q.z / (a.z * scale)).powi(2))
+                .sqrt()
+                - (1.0 + bump);
         // Convert the (dimensionless) ellipsoid field to an approximate metric
         // distance so the smooth-union blend width is meaningful.
         let body = body * a.min_component();
@@ -125,8 +124,16 @@ impl SinusParams {
         let mut bb = Aabb::new(self.center - a, self.center + a);
         // Include the socket stub.
         let (sx, sz) = self.socket_xz;
-        bb.expand(Vec3::new(sx + self.socket_radius, self.socket_bottom_y(), sz + self.socket_radius));
-        bb.expand(Vec3::new(sx - self.socket_radius, self.socket_bottom_y(), sz - self.socket_radius));
+        bb.expand(Vec3::new(
+            sx + self.socket_radius,
+            self.socket_bottom_y(),
+            sz + self.socket_radius,
+        ));
+        bb.expand(Vec3::new(
+            sx - self.socket_radius,
+            self.socket_bottom_y(),
+            sz - self.socket_radius,
+        ));
         bb.padded(2.0 * self.model_dx)
     }
 
@@ -183,7 +190,10 @@ mod tests {
         // Should be in a plausible range for a maxillary sinus: 5–30 ml
         // (1 ml = 1e-6 m^3).
         let ml = vol * 1e6;
-        assert!(ml > 4.0 && ml < 35.0, "implausible sinus volume: {ml:.2} ml");
+        assert!(
+            ml > 4.0 && ml < 35.0,
+            "implausible sinus volume: {ml:.2} ml"
+        );
     }
 
     #[test]
@@ -191,7 +201,10 @@ mod tests {
         let params = SinusParams::default();
         let (tip, axis) = params.suggested_needle();
         // The suggested tip should lie inside the cavity (implicit < 0).
-        assert!(params.implicit(tip) < 0.0, "needle tip should be inside the cavity");
+        assert!(
+            params.implicit(tip) < 0.0,
+            "needle tip should be inside the cavity"
+        );
         assert!(axis.y > 0.0, "needle should point upward into the cavity");
     }
 
@@ -202,6 +215,9 @@ mod tests {
         // (the communication channel).
         let (sx, sz) = params.socket_xz;
         let p = Vec3::new(sx, params.socket_bottom_y() + 0.001, sz);
-        assert!(params.implicit(p) < 0.0, "socket channel should be open below the floor");
+        assert!(
+            params.implicit(p) < 0.0,
+            "socket channel should be open below the floor"
+        );
     }
 }

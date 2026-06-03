@@ -143,7 +143,13 @@ impl MetricsCollector {
                         continue;
                     }
                     let nb_solid = |ci: i64, cj: i64, ck: i64| -> bool {
-                        if ci < 0 || cj < 0 || ck < 0 || ci as usize >= nx || cj as usize >= ny || ck as usize >= nz {
+                        if ci < 0
+                            || cj < 0
+                            || ck < 0
+                            || ci as usize >= nx
+                            || cj as usize >= ny
+                            || ck as usize >= nz
+                        {
                             return true; // domain boundary counts as wall
                         }
                         !inside[(ck as usize * ny + cj as usize) * nx + ci as usize]
@@ -221,7 +227,8 @@ impl MetricsCollector {
         // the clinical risk number.
         let v_jet = solver.needle.jet_speed();
         let stagnation = 0.5 * solver.fluid.density * v_jet * v_jet;
-        let hydrostatic = solver.fluid.density * solver.fluid.gravity.length() * (self.ny as f64 * self.dx);
+        let hydrostatic =
+            solver.fluid.density * solver.fluid.gravity.length() * (self.ny as f64 * self.dx);
         let p_cap = MEMBRANE_PRESSURE_CAP_FACTOR * stagnation + hydrostatic + 500.0;
 
         let wall_pressures: Vec<f64> = wet_wall.iter().map(|&c| solver.pressure[c]).collect();
@@ -232,7 +239,8 @@ impl MetricsCollector {
             // face neighbours are also hot — a coherent focal zone (the jet
             // impingement on the wall) has hot neighbours; a lone solver artifact
             // does not.
-            let mut cells: Vec<(usize, f64)> = wet_wall.iter().map(|&c| (c, solver.pressure[c])).collect();
+            let mut cells: Vec<(usize, f64)> =
+                wet_wall.iter().map(|&c| (c, solver.pressure[c])).collect();
             cells.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
             let descr: Vec<String> = cells
                 .iter()
@@ -242,9 +250,22 @@ impl MetricsCollector {
                     let j = (c / self.nx) % self.ny;
                     let k = c / (self.nx * self.ny);
                     let mut hot_nb = 0;
-                    for (di, dj, dk) in [(-1i64, 0, 0), (1, 0, 0), (0, -1, 0), (0, 1, 0), (0, 0, -1), (0, 0, 1)] {
+                    for (di, dj, dk) in [
+                        (-1i64, 0, 0),
+                        (1, 0, 0),
+                        (0, -1, 0),
+                        (0, 1, 0),
+                        (0, 0, -1),
+                        (0, 0, 1),
+                    ] {
                         let (ni, nj, nk) = (i as i64 + di, j as i64 + dj, k as i64 + dk);
-                        if ni >= 0 && nj >= 0 && nk >= 0 && (ni as usize) < self.nx && (nj as usize) < self.ny && (nk as usize) < self.nz {
+                        if ni >= 0
+                            && nj >= 0
+                            && nk >= 0
+                            && (ni as usize) < self.nx
+                            && (nj as usize) < self.ny
+                            && (nk as usize) < self.nz
+                        {
                             let nc = (nk as usize * self.ny + nj as usize) * self.nx + ni as usize;
                             if solver.pressure[nc] > 0.25 * p {
                                 hot_nb += 1;
@@ -297,10 +318,26 @@ impl MetricsCollector {
 
     /// Aggregate summary across all recorded frames.
     pub fn summary(&self) -> Summary {
-        let peak_fill = self.history.iter().map(|m| m.fill_fraction).fold(0.0, f64::max);
-        let peak_cov = self.history.iter().map(|m| m.wall_coverage).fold(0.0, f64::max);
-        let peak_p = self.history.iter().map(|m| m.max_pressure_pa).fold(0.0, f64::max);
-        let peak_membrane = self.history.iter().map(|m| m.peak_wall_pressure_pa).fold(0.0, f64::max);
+        let peak_fill = self
+            .history
+            .iter()
+            .map(|m| m.fill_fraction)
+            .fold(0.0, f64::max);
+        let peak_cov = self
+            .history
+            .iter()
+            .map(|m| m.wall_coverage)
+            .fold(0.0, f64::max);
+        let peak_p = self
+            .history
+            .iter()
+            .map(|m| m.max_pressure_pa)
+            .fold(0.0, f64::max);
+        let peak_membrane = self
+            .history
+            .iter()
+            .map(|m| m.peak_wall_pressure_pa)
+            .fold(0.0, f64::max);
         let mean_membrane = if self.history.is_empty() {
             0.0
         } else {
@@ -314,7 +351,11 @@ impl MetricsCollector {
         let resident_ml = last.map(|m| m.fluid_volume_ml).unwrap_or(0.0);
         let drained_ml = last.map(|m| m.drained_volume_ml).unwrap_or(0.0);
         let injected = resident_ml + drained_ml;
-        let mass_balance = if self.injected_ml > 0.0 { injected / self.injected_ml } else { 1.0 };
+        let mass_balance = if self.injected_ml > 0.0 {
+            injected / self.injected_ml
+        } else {
+            1.0
+        };
 
         Summary {
             frames: self.history.len(),
@@ -339,7 +380,8 @@ impl MetricsCollector {
     /// Write the per-frame history as a JSON array.
     pub fn write_json(&self, path: impl AsRef<Path>) -> Result<()> {
         let path = path.as_ref();
-        let text = serde_json::to_string_pretty(&self.history).context("serialising metrics JSON")?;
+        let text =
+            serde_json::to_string_pretty(&self.history).context("serialising metrics JSON")?;
         std::fs::write(path, text).with_context(|| format!("writing {}", path.display()))?;
         Ok(())
     }
@@ -347,7 +389,8 @@ impl MetricsCollector {
     /// Write the per-frame history as CSV (header + one row per frame).
     pub fn write_csv(&self, path: impl AsRef<Path>) -> Result<()> {
         let path = path.as_ref();
-        let file = std::fs::File::create(path).with_context(|| format!("creating {}", path.display()))?;
+        let file =
+            std::fs::File::create(path).with_context(|| format!("creating {}", path.display()))?;
         let mut w = std::io::BufWriter::new(file);
         writeln!(
             w,
@@ -479,7 +522,11 @@ particles_per_cell = 16
         assert!(s.peak_membrane_pressure_pa <= s.peak_pressure_pa + 1e-6);
         assert!(s.mean_membrane_pressure_pa <= s.peak_membrane_pressure_pa + 1e-6);
         // On a coarse but valid small scene the cap should reject few or no cells.
-        assert!(s.membrane_artifacts_total <= s.frames * 2, "too many pressure artifacts: {}", s.membrane_artifacts_total);
+        assert!(
+            s.membrane_artifacts_total <= s.frames * 2,
+            "too many pressure artifacts: {}",
+            s.membrane_artifacts_total
+        );
     }
 
     #[test]
