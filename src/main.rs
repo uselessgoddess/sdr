@@ -60,6 +60,12 @@ enum Cmd {
         /// Longest edge of preview images, pixels (0 disables previews).
         #[arg(long, default_value_t = 600)]
         preview_px: u32,
+        /// Preview view. `slice` is a thin x–y slab at the needle tip (good for a
+        /// fat, symmetric cavity); `gravity` is a silhouette projection down the
+        /// gravity vector that shows the fluid fall and pool — the right view for
+        /// a thin, branching real CT cavity.
+        #[arg(long, value_enum, default_value_t = PreviewPlane::Slice)]
+        preview_plane: PreviewPlane,
         /// Reconstruct the final frame's surface via splashsurf.
         #[arg(long)]
         reconstruct: bool,
@@ -102,6 +108,14 @@ enum ParticleFormat {
     Xyz,
 }
 
+#[derive(Clone, Copy, ValueEnum)]
+enum PreviewPlane {
+    /// Thin x–y slab at the needle tip's z.
+    Slice,
+    /// Silhouette projection down the gravity vector.
+    Gravity,
+}
+
 impl ParticleFormat {
     fn ext(self) -> &'static str {
         match self {
@@ -121,6 +135,7 @@ fn main() -> Result<()> {
             out_dir,
             format,
             preview_px,
+            preview_plane,
             reconstruct,
             min_coverage,
             min_fill,
@@ -130,6 +145,7 @@ fn main() -> Result<()> {
             out_dir: &out_dir,
             format,
             preview_px,
+            preview_plane,
             reconstruct,
             min_coverage,
             min_fill,
@@ -189,6 +205,7 @@ struct SimulateArgs<'a> {
     out_dir: &'a str,
     format: ParticleFormat,
     preview_px: u32,
+    preview_plane: PreviewPlane,
     reconstruct: bool,
     min_coverage: Option<f64>,
     min_fill: Option<f64>,
@@ -218,12 +235,18 @@ fn cmd_simulate(args: SimulateArgs) -> Result<()> {
             built.frames,
             built.frame_dt * built.frames as f64,
         );
+        if std::env::var("SDR_DEBUG_FILL").is_ok() {
+            eprintln!("{}", built.solver.debug_cavity_geometry());
+        }
     }
 
     let mut metrics = MetricsCollector::new(&built.solver, built.cavity_volume);
     // Keep the colour scale constant across frames for a comparable animation.
     let vmax = built.solver.needle.jet_speed();
-    let slice = SlicePlane::xy(built.solver.needle.tip.z, built.solver.grid.dx);
+    let slice = match args.preview_plane {
+        PreviewPlane::Slice => SlicePlane::xy(built.solver.needle.tip.z, built.solver.grid.dx),
+        PreviewPlane::Gravity => SlicePlane::projected_along_gravity(built.solver.fluid.gravity),
+    };
     let mut last_frame_file: Option<PathBuf> = None;
 
     for f in 0..built.frames {
@@ -260,6 +283,19 @@ fn cmd_simulate(args: SimulateArgs) -> Result<()> {
                 m.peak_wall_pressure_mmhg,
                 m.pcg_iters,
             );
+            if std::env::var("SDR_DEBUG_FILL").is_ok() {
+                // Spreading vs. clumping: fluid_cells should climb toward the
+                // reachable cell count while max particles/cell stays near the
+                // seeding density. A large max/cell with few fluid cells is the
+                // FLIP clump that volume control exists to prevent.
+                eprintln!(
+                    "        fluid_cells={:>6}  max_particles/cell={:>5}  (seed {})",
+                    built.solver.cells_fluid_count(),
+                    built.solver.max_particles_per_cell(),
+                    built.solver.fluid.particles_per_cell,
+                );
+                eprintln!("{}", built.solver.debug_distribution());
+            }
         }
     }
 

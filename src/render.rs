@@ -24,8 +24,27 @@ const INTERIOR: Rgb<u8> = Rgb([232, 236, 244]);
 const WALL: Rgb<u8> = Rgb([44, 44, 54]);
 const NEEDLE: Rgb<u8> = Rgb([255, 80, 80]);
 
+// Amber irrigation fluid (the gravity "hero" view). A thin film reads as a light,
+// warm amber; a deep column of pooled fluid absorbs more and darkens (a hand-tuned
+// Beer–Lambert look that matches the author's Blender render). The free surface
+// emerges naturally where the projected fluid coverage fades out.
+const AMBER_FILM: Rgb<u8> = Rgb([242, 178, 92]);
+const AMBER_DEEP: Rgb<u8> = Rgb([150, 78, 18]);
+
 /// An orthographic slice plane: two in-plane axes (horizontal, vertical) and one
 /// out-of-plane axis we slice along. Axis indices are `0 = x, 1 = y, 2 = z`.
+///
+/// When `project` is set the plane is a *projection* rather than a thin slice:
+/// the background pixel is cavity-interior if the cavity is interior at **any**
+/// depth along the out-of-plane axis (a silhouette / maximum-intensity
+/// projection), and every particle is drawn regardless of its depth. This is the
+/// honest way to view a thin, branching CT-derived cavity, where a single thin
+/// slab would miss most of the fluid.
+///
+/// When `amber` is set the fluid is drawn as a translucent amber pool (coverage
+/// compositing, shaded by depth) instead of speed-coloured dots. We turn it on
+/// only for the gravity projection — the presentation "hero" view — and keep the
+/// speed map for the diagnostic slices.
 #[derive(Debug, Clone, Copy)]
 pub struct SlicePlane {
     hax: usize,
@@ -34,6 +53,8 @@ pub struct SlicePlane {
     slice: f64,
     slab: f64,
     flip_v: bool,
+    project: bool,
+    amber: bool,
 }
 
 impl SlicePlane {
@@ -48,6 +69,8 @@ impl SlicePlane {
             slice,
             slab,
             flip_v: true,
+            project: false,
+            amber: false,
         }
     }
 
@@ -60,6 +83,58 @@ impl SlicePlane {
             slice,
             slab,
             flip_v: false,
+            project: false,
+            amber: false,
+        }
+    }
+
+    /// Side view in the y–z plane at `x = slice` (z up, y to the right).
+    pub fn yz(slice: f64, slab: f64) -> Self {
+        SlicePlane {
+            hax: 1,
+            vax: 2,
+            oax: 0,
+            slice,
+            slab,
+            flip_v: true,
+            project: false,
+            amber: false,
+        }
+    }
+
+    /// A silhouette **projection** viewed along the gravity-free axis, with the
+    /// dominant gravity component running down the image so the fluid is seen to
+    /// fall and pool. We look along the axis with the *least* gravity (so the
+    /// projection collapses the shallowest direction), put the *largest*-gravity
+    /// axis vertical, and flip it so `+gravity` points down. Ideal for the real
+    /// maxillary antrum, whose recovered gravity `(0, +8.03, −5.63)` lies in the
+    /// y–z plane → a y-down, z-across side view projected along x.
+    pub fn projected_along_gravity(gravity: Vec3) -> Self {
+        let g = gravity.to_array();
+        let gabs = [g[0].abs(), g[1].abs(), g[2].abs()];
+        // Look along the shallowest (least-gravity) axis. Deterministic ties:
+        // `min_by` keeps the first axis when components are equal.
+        let oax = (0..3)
+            .min_by(|&a, &b| gabs[a].partial_cmp(&gabs[b]).unwrap())
+            .unwrap();
+        let rem: Vec<usize> = (0..3).filter(|&a| a != oax).collect();
+        let (vax, hax) = if gabs[rem[0]] >= gabs[rem[1]] {
+            (rem[0], rem[1])
+        } else {
+            (rem[1], rem[0])
+        };
+        // flip_v=false maps larger coords downward; flip_v=true maps them up. We
+        // want +gravity downward, so flip only when gravity points to -vax.
+        let flip_v = g[vax] < 0.0;
+        SlicePlane {
+            hax,
+            vax,
+            oax,
+            slice: 0.0,
+            slab: f64::INFINITY,
+            flip_v,
+            project: true,
+            amber: true,
         }
     }
 }
@@ -90,17 +165,28 @@ pub fn render_slice(solver: &Solver, plane: &SlicePlane, target_px: u32, vmax: f
 
     let mut img = RgbImage::from_pixel(w, h, BG);
 
-    // Background: shade cavity interior vs. surrounding solid by sampling the
-    // SDF at each pixel's world position on the slice plane.
+    // Background: shade cavity interior vs. surrounding solid. A thin slice
+    // samples the SDF on the plane; a projection marks a pixel interior if the
+    // cavity is interior at *any* depth along the out-of-plane axis (silhouette).
+    let oa_lo = mn[plane.oax];
+    let oa_span = (mx[plane.oax] - mn[plane.oax]).max(1e-9);
+    const PROJ_SAMPLES: usize = 96;
     for py in 0..h {
         for px in 0..w {
-            let p = self_world(plane, mn, mx, wm, hm, w, h, px, py);
-            let color = if solver.solid.sample(p) < 0.0 {
-                INTERIOR
+            let (wx, wy) = in_plane_world(plane, mn, mx, wm, hm, w, h, px, py);
+            let mut c = [0.0; 3];
+            c[plane.hax] = wx;
+            c[plane.vax] = wy;
+            let interior = if plane.project {
+                (0..PROJ_SAMPLES).any(|s| {
+                    c[plane.oax] = oa_lo + (s as f64 + 0.5) / PROJ_SAMPLES as f64 * oa_span;
+                    solver.solid.sample(Vec3::new(c[0], c[1], c[2])) < 0.0
+                })
             } else {
-                WALL
+                c[plane.oax] = plane.slice;
+                solver.solid.sample(Vec3::new(c[0], c[1], c[2])) < 0.0
             };
-            img.put_pixel(px, py, color);
+            img.put_pixel(px, py, if interior { INTERIOR } else { WALL });
         }
     }
 
@@ -115,24 +201,31 @@ pub fn render_slice(solver: &Solver, plane: &SlicePlane, target_px: u32, vmax: f
         (fx as i64, fy as i64)
     };
 
-    // Particles within the slab, coloured by speed.
-    let vmax = if vmax > 0.0 {
-        vmax
+    // Fluid overlay. The gravity hero view renders a translucent amber *pool*
+    // (coverage compositing, shaded by depth) so the settled free surface reads
+    // like the author's Blender frame; the diagnostic slices keep speed-coloured
+    // dots so a reviewer can see where the jet is fast.
+    if plane.amber {
+        draw_amber_pool(&mut img, solver, plane, to_px, w, h);
     } else {
-        solver.max_speed().max(1e-6)
-    };
-    for (p, v) in solver
-        .particles
-        .positions
-        .iter()
-        .zip(&solver.particles.velocities)
-    {
-        if (p.to_array()[plane.oax] - plane.slice).abs() > plane.slab {
-            continue;
+        let vmax = if vmax > 0.0 {
+            vmax
+        } else {
+            solver.max_speed().max(1e-6)
+        };
+        for (p, v) in solver
+            .particles
+            .positions
+            .iter()
+            .zip(&solver.particles.velocities)
+        {
+            if (p.to_array()[plane.oax] - plane.slice).abs() > plane.slab {
+                continue;
+            }
+            let (cx, cy) = to_px(*p);
+            let t = (v.length() / vmax).clamp(0.0, 1.0);
+            draw_disk(&mut img, cx, cy, 2, speed_color(t));
         }
-        let (cx, cy) = to_px(*p);
-        let t = (v.length() / vmax).clamp(0.0, 1.0);
-        draw_disk(&mut img, cx, cy, 2, speed_color(t));
     }
 
     // Needle: a short segment behind the tip plus a marker at the tip.
@@ -146,9 +239,87 @@ pub fn render_slice(solver: &Solver, plane: &SlicePlane, target_px: u32, vmax: f
     img
 }
 
-/// World position of pixel `(px, py)` on the slice plane.
+/// Draw the fluid as a translucent amber pool.
+///
+/// Every particle splats a soft disk into a per-pixel *coverage* buffer using
+/// "over" compositing, so overlapping particles accumulate toward full opacity.
+/// Coverage then drives both the alpha (how much amber vs. background shows) and
+/// the shade (a thin film is light amber; a deep, well-covered column darkens,
+/// mimicking Beer–Lambert absorption). The pool's free surface appears for free
+/// where the projected coverage falls off. Iteration is in particle-array order,
+/// so the result is deterministic for a given particle set.
+fn draw_amber_pool(
+    img: &mut RgbImage,
+    solver: &Solver,
+    plane: &SlicePlane,
+    to_px: impl Fn(Vec3) -> (i64, i64),
+    w: u32,
+    h: u32,
+) {
+    const R: i64 = 4; // splat radius in pixels
+    const PEAK: f64 = 0.18; // per-particle peak coverage at the disk centre
+    let rr = (R * R) as f64;
+
+    let mut cov = vec![0.0f64; (w as usize) * (h as usize)];
+    for p in &solver.particles.positions {
+        if (p.to_array()[plane.oax] - plane.slice).abs() > plane.slab {
+            continue;
+        }
+        let (cx, cy) = to_px(*p);
+        for dy in -R..=R {
+            for dx in -R..=R {
+                let d2 = (dx * dx + dy * dy) as f64;
+                if d2 > rr {
+                    continue;
+                }
+                let (x, y) = (cx + dx, cy + dy);
+                if x < 0 || y < 0 || x as u32 >= w || y as u32 >= h {
+                    continue;
+                }
+                let a = PEAK * (1.0 - d2 / rr);
+                let idx = (y as usize) * (w as usize) + x as usize;
+                cov[idx] += (1.0 - cov[idx]) * a;
+            }
+        }
+    }
+
+    for py in 0..h {
+        for px in 0..w {
+            let c = cov[(py as usize) * (w as usize) + px as usize].clamp(0.0, 1.0);
+            if c <= 1.0 / 255.0 {
+                continue; // leave the cavity/wall background untouched
+            }
+            let film = AMBER_FILM.0;
+            let deep = AMBER_DEEP.0;
+            // Deeper coverage → darker amber (absorption); coverage is also the
+            // alpha used to composite that amber over the background pixel.
+            let amber = [
+                lerp_u8(film[0], deep[0], c),
+                lerp_u8(film[1], deep[1], c),
+                lerp_u8(film[2], deep[2], c),
+            ];
+            let bg = img.get_pixel(px, py).0;
+            let out = Rgb([
+                lerp_u8(bg[0], amber[0], c),
+                lerp_u8(bg[1], amber[1], c),
+                lerp_u8(bg[2], amber[2], c),
+            ]);
+            img.put_pixel(px, py, out);
+        }
+    }
+}
+
+/// Linear interpolation between two `u8` channel values (`t` clamped to `0..1`).
+fn lerp_u8(a: u8, b: u8, t: f64) -> u8 {
+    let t = t.clamp(0.0, 1.0);
+    (a as f64 * (1.0 - t) + b as f64 * t)
+        .round()
+        .clamp(0.0, 255.0) as u8
+}
+
+/// In-plane world coordinates `(horizontal, vertical)` of pixel `(px, py)`.
 #[allow(clippy::too_many_arguments)]
-fn self_world(
+fn in_plane_world(
     plane: &SlicePlane,
     mn: [f64; 3],
     mx: [f64; 3],
@@ -158,18 +329,14 @@ fn self_world(
     h: u32,
     px: u32,
     py: u32,
-) -> Vec3 {
+) -> (f64, f64) {
     let wx = mn[plane.hax] + (px as f64 + 0.5) / w as f64 * wm;
     let wy = if plane.flip_v {
         mx[plane.vax] - (py as f64 + 0.5) / h as f64 * hm
     } else {
         mn[plane.vax] + (py as f64 + 0.5) / h as f64 * hm
     };
-    let mut c = [0.0; 3];
-    c[plane.hax] = wx;
-    c[plane.vax] = wy;
-    c[plane.oax] = plane.slice;
-    Vec3::new(c[0], c[1], c[2])
+    (wx, wy)
 }
 
 /// Plot the headline metrics over the run: fill fraction (blue), wall coverage
@@ -343,6 +510,65 @@ particles_per_cell = 16
         assert!(has_colored, "no fluid/needle pixels rendered");
 
         save_png(&img, std::env::temp_dir().join("sdr_slice_test.png")).unwrap();
+    }
+
+    #[test]
+    fn gravity_projection_picks_axes_and_renders() {
+        // Gravity (0, +8, −6) lives in the y–z plane: look along x, put y (the
+        // larger component) vertical and flip it so +y points *down*.
+        let plane = SlicePlane::projected_along_gravity(Vec3::new(0.0, 8.0, -6.0));
+        assert_eq!((plane.hax, plane.vax, plane.oax), (2, 1, 0));
+        assert!(plane.project && plane.slab.is_infinite());
+        assert!(
+            !plane.flip_v,
+            "+gravity along +y must map downward (no flip)"
+        );
+
+        // The projection must still draw a cavity silhouette and fluid.
+        let mut built = short_run();
+        for _ in 0..built.frames {
+            built.solver.step(built.frame_dt);
+        }
+        let plane = SlicePlane::projected_along_gravity(built.solver.fluid.gravity);
+        let img = render_slice(&built.solver, &plane, 300, 0.0);
+        assert!(img.pixels().any(|p| *p == INTERIOR), "no cavity silhouette");
+        assert!(
+            img.pixels().any(|p| {
+                let [r, g, b] = p.0;
+                (r.max(g).max(b) as i32) - (r.min(g).min(b) as i32) > 60
+            }),
+            "no fluid/needle pixels rendered"
+        );
+    }
+
+    #[test]
+    fn amber_pool_is_rendered_for_gravity_view() {
+        // The gravity projection paints the fluid as an amber pool. After a short
+        // run there must be at least one clearly amber pixel — red > green > blue,
+        // the signature of the warm pool, which no other element produces (the
+        // needle is [255, 80, 80] with green == blue; the cavity and wall are
+        // bluish-grey with blue >= red).
+        let mut built = short_run();
+        for _ in 0..built.frames {
+            built.solver.step(built.frame_dt);
+        }
+        let plane = SlicePlane::projected_along_gravity(built.solver.fluid.gravity);
+        assert!(plane.amber, "the gravity hero view must use the amber look");
+        let img = render_slice(&built.solver, &plane, 300, 0.0);
+
+        let amber = img.pixels().any(|p| {
+            let [r, g, b] = p.0;
+            r > g && g > b && (r as i32 - b as i32) > 20
+        });
+        assert!(amber, "no amber fluid pool was rendered");
+
+        // The renderer is deterministic: the same particle set must produce a
+        // byte-identical image (the pool compositing is order-stable).
+        let img2 = render_slice(&built.solver, &plane, 300, 0.0);
+        assert!(
+            img.pixels().zip(img2.pixels()).all(|(a, b)| a == b),
+            "amber render is not deterministic"
+        );
     }
 
     #[test]
