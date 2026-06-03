@@ -114,6 +114,10 @@ pub struct Solver {
     pub steps: u64,
     /// Iterations taken by the last pressure solve (diagnostic).
     pub last_pcg_iters: usize,
+    /// Per-cell pressure (Pa, gauge) from the last projection; `0` off-fluid.
+    pub pressure: Vec<f64>,
+    /// Cumulative number of particles removed at the outlet (drainage).
+    pub drained: u64,
 
     cells: Vec<Cell>,
     // FLIP needs the post-P2G grid to form the velocity delta.
@@ -145,6 +149,8 @@ impl Solver {
             time: 0.0,
             steps: 0,
             last_pcg_iters: 0,
+            pressure: vec![0.0; n],
+            drained: 0,
             cells: vec![Cell::Air; n],
             saved_u: Vec::new(),
             saved_v: Vec::new(),
@@ -193,8 +199,10 @@ impl Solver {
         self.p2g();
         self.save_grid();
         self.add_forces(dt);
-        let report = pressure::project(&mut self.grid, &self.cells, self.fluid.density, dt, self.solve);
+        let (report, pressure) =
+            pressure::project_capturing(&mut self.grid, &self.cells, self.fluid.density, dt, self.solve);
         self.last_pcg_iters = report.iters;
+        self.pressure = pressure;
         self.extrapolate_velocities();
         self.g2p();
         self.advect(dt);
@@ -409,18 +417,60 @@ impl Solver {
         let bb = self.solid.bounds();
         let outlet = self.outlet;
         let solid = &self.solid;
+        let mut drained = 0u64;
         self.particles.retain(|p, _| {
             if !bb.contains(p) {
                 return false;
             }
             if let Some(o) = outlet {
                 if o.contains(p) {
-                    return false; // drained
+                    drained += 1; // left through the outlet
+                    return false;
                 }
             }
             // Deep inside the wall and unrecoverable -> drop.
             solid.sample(p) < 0.5 * solid.dx
         });
+        self.drained += drained;
+    }
+
+    /// Volume that has drained out of the outlet so far, m³.
+    pub fn drained_volume(&self) -> f64 {
+        self.drained as f64 * self.particle_volume()
+    }
+
+    /// Peak fluid gauge pressure in the cavity, pascals.
+    pub fn max_pressure(&self) -> f64 {
+        self.cells
+            .iter()
+            .zip(&self.pressure)
+            .filter(|(c, _)| **c == Cell::Fluid)
+            .map(|(_, &p)| p)
+            .fold(0.0_f64, f64::max)
+    }
+
+    /// Mean fluid gauge pressure over fluid cells, pascals.
+    pub fn mean_pressure(&self) -> f64 {
+        let (sum, n) = self
+            .cells
+            .iter()
+            .zip(&self.pressure)
+            .filter(|(c, _)| **c == Cell::Fluid)
+            .fold((0.0_f64, 0u64), |(s, n), (_, &p)| (s + p, n + 1));
+        if n > 0 {
+            sum / n as f64
+        } else {
+            0.0
+        }
+    }
+
+    /// Maximum particle speed, m/s.
+    pub fn max_speed(&self) -> f64 {
+        self.particles
+            .velocities
+            .iter()
+            .map(|v| v.length())
+            .fold(0.0_f64, f64::max)
     }
 
     fn in_outlet(&self, p: Vec3) -> bool {

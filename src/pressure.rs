@@ -83,6 +83,20 @@ impl Laplacian {
 /// inside the fluid, faces touching solids carry the (zero) wall velocity, and
 /// the report gives the iteration count and final residual.
 pub fn project(grid: &mut MacGrid, cells: &[Cell], rho: f64, dt: f64, params: SolveParams) -> SolveReport {
+    project_capturing(grid, cells, rho, dt, params).0
+}
+
+/// Like [`project`], but also returns the per-cell pressure field in pascals
+/// (gauge pressure relative to the free surface, where `p = 0`). Pressure is
+/// zero in non-fluid cells. Useful for clinical diagnostics — the peak fluid
+/// pressure is the over-pressure the sinus wall experiences.
+pub fn project_capturing(
+    grid: &mut MacGrid,
+    cells: &[Cell],
+    rho: f64,
+    dt: f64,
+    params: SolveParams,
+) -> (SolveReport, Vec<f64>) {
     let (nx, ny, nz) = (grid.nx, grid.ny, grid.nz);
     let n = nx * ny * nz;
     assert_eq!(cells.len(), n, "cell classification must cover the whole grid");
@@ -174,7 +188,7 @@ pub fn project(grid: &mut MacGrid, cells: &[Cell], rho: f64, dt: f64, params: So
     let coef = dt / (rho * grid.dx);
     apply_pressure_gradient(grid, cells, &report.pressure, coef);
 
-    SolveReport { iters: report.iters, residual: report.residual }
+    (SolveReport { iters: report.iters, residual: report.residual }, report.pressure)
 }
 
 /// Set every face touching a solid (or the domain boundary) to the static wall
