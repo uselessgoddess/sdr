@@ -188,8 +188,12 @@ impl MetricsCollector {
     pub fn record(&mut self, solver: &Solver, frame: usize) -> FrameMetrics {
         // Mark wall cells currently containing fluid as washed, and collect the
         // (deduplicated) set of wall cells in contact with fluid *this* frame so
-        // we can read the membrane pressure load there.
-        let mut wet_wall: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        // we can read the membrane pressure load there. A `BTreeSet` (not a
+        // `HashSet`) is deliberate: it iterates in sorted cell-index order, so
+        // the mean membrane load is summed in a fixed order and stays
+        // bit-for-bit reproducible. A `HashSet`'s per-process random iteration
+        // order would make that sum drift in the low bits between runs.
+        let mut wet_wall: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
         for &p in &solver.particles.positions {
             if let Some(c) = self.cell_index(p) {
                 if self.is_wall[c] {
