@@ -19,6 +19,24 @@ DICOM CT ─▶ segmentation ─▶ mesh cleanup ─▶  sdr (this repo)  ─▶
 `sdr` owns the middle box. You can drive it parametrically (no patient data
 needed) or feed it a watertight cavity mesh segmented from a real CT.
 
+## What it looks like
+
+A 2 s irrigation of the parametric sinus ([`examples/scene.toml`](examples/scene.toml)),
+rendered straight from the solver. The needle (red line) enters through the
+oroantral communication; particles are coloured by speed — the fast jet (red),
+the lining wash (green at the roof), and the pooled/draining fluid (blue).
+
+| jet enters the socket | cavity fills | lining fully washed |
+| :---: | :---: | :---: |
+| ![jet initiation](docs/screenshots/01_jet_initiation.png) | ![filling](docs/screenshots/02_filling.png) | ![wall wash](docs/screenshots/03_wall_wash.png) |
+
+![metrics over time](docs/screenshots/metrics_timeseries.png)
+
+*Clinical metrics over the run: wall-contact coverage (green) climbs to ~59 %
+as the lining is washed; fill fraction (blue) plateaus near 20 % once inflow
+balances drainage; focal membrane pressure (red) spikes where the jet impinges.
+All four images are produced by `sdr simulate` itself — no external tooling.*
+
 ## Why it exists
 
 CT slices don’t show a clinician how irrigant actually moves: where it pools,
@@ -92,15 +110,15 @@ out/
 └── summary.json   headline numbers (see below)
 ```
 
-Example summary:
+Example summary (the `examples/scene.toml` run shown in the gallery above):
 
 ```
 === irrigation summary ===
-peak fill fraction :   20.1 %
-peak wall coverage :   36.6 %  (flushing effectiveness)
-peak membrane load :  181.6 mmHg (24205 Pa)  (focal jet impingement — over-pressure risk)
-mean membrane load :    3.2 mmHg (430 Pa)  (typical broad load on the lining)
-drained volume     :   0.59 ml
+peak fill fraction :   19.9 %
+peak wall coverage :   59.1 %  (flushing effectiveness)
+peak membrane load : 1099.3 mmHg (146558 Pa)  (focal jet impingement — over-pressure risk)
+mean membrane load :    3.3 mmHg (436 Pa)  (typical broad load on the lining)
+drained volume     :   8.11 ml  (of 10.0 ml injected)
 mass balance       :  1.000  (1.0 = conserved)
 ```
 
