@@ -83,6 +83,173 @@ impl TriMesh {
         }
     }
 
+    /// Centroid of triangle `i`.
+    #[inline]
+    pub fn triangle_centroid(&self, i: usize) -> Vec3 {
+        let [a, b, c] = self.triangle(i);
+        (a + b + c) / 3.0
+    }
+
+    /// Keep only the triangles whose centroid lies inside `box`.
+    ///
+    /// Used to carve one anatomical cavity (e.g. the maxillary sinus) out of a
+    /// full-airway scan. The result is re-indexed and may be non-watertight
+    /// where the box slices through a wall — choose the box so its faces fall
+    /// outside the cavity of interest (in bone or beyond it).
+    pub fn cropped(&self, region: Aabb) -> TriMesh {
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        // Re-pack only the vertices actually referenced by kept triangles.
+        let mut remap: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+        for t in 0..self.triangle_count() {
+            if !region.contains(self.triangle_centroid(t)) {
+                continue;
+            }
+            let mut tri = [0u32; 3];
+            for (j, slot) in tri.iter_mut().enumerate() {
+                let old = self.indices[t][j];
+                let new = *remap.entry(old).or_insert_with(|| {
+                    let id = vertices.len() as u32;
+                    vertices.push(self.vertices[old as usize]);
+                    id
+                });
+                *slot = new;
+            }
+            indices.push(tri);
+        }
+        TriMesh::new(vertices, indices)
+    }
+
+    /// Vertex-cluster decimation: snap every vertex to a `cell`-sized lattice,
+    /// weld coincident vertices (averaging their positions) and drop the
+    /// triangles that collapse to a line or point.
+    ///
+    /// This both **welds** an unindexed STL (three independent vertices per
+    /// face) into a shared-vertex mesh and **coarsens** it to a resolution the
+    /// solver grid can actually see — features finer than `cell` are invisible
+    /// to a level set sampled at `cell`. Deterministic: clusters are numbered in
+    /// first-encounter order, so the output is bit-for-bit stable.
+    pub fn decimated_vertex_cluster(&self, cell: f64) -> TriMesh {
+        assert!(cell > 0.0, "decimation cell must be positive");
+        let inv = 1.0 / cell;
+        let key = |v: Vec3| -> (i64, i64, i64) {
+            (
+                (v.x * inv).floor() as i64,
+                (v.y * inv).floor() as i64,
+                (v.z * inv).floor() as i64,
+            )
+        };
+        // Cluster id in first-seen order + running sum/count for the average.
+        let mut cluster_of: std::collections::HashMap<(i64, i64, i64), u32> =
+            std::collections::HashMap::new();
+        let mut sum: Vec<Vec3> = Vec::new();
+        let mut count: Vec<u32> = Vec::new();
+        let mut vtx_cluster = vec![0u32; self.vertices.len()];
+        for (vi, &v) in self.vertices.iter().enumerate() {
+            let k = key(v);
+            let id = *cluster_of.entry(k).or_insert_with(|| {
+                let id = sum.len() as u32;
+                sum.push(Vec3::ZERO);
+                count.push(0);
+                id
+            });
+            sum[id as usize] += v;
+            count[id as usize] += 1;
+            vtx_cluster[vi] = id;
+        }
+        let vertices: Vec<Vec3> = sum
+            .iter()
+            .zip(&count)
+            .map(|(s, &c)| *s / c as f64)
+            .collect();
+        let mut indices = Vec::new();
+        for tri in &self.indices {
+            let a = vtx_cluster[tri[0] as usize];
+            let b = vtx_cluster[tri[1] as usize];
+            let c = vtx_cluster[tri[2] as usize];
+            // Drop faces that collapsed onto a shared cluster.
+            if a != b && b != c && a != c {
+                indices.push([a, b, c]);
+            }
+        }
+        TriMesh::new(vertices, indices)
+    }
+
+    /// Connected components over shared vertex indices (union-find). Returns,
+    /// for every triangle, the id of its component, plus the number of
+    /// components. Only meaningful on a **welded** mesh (see
+    /// [`TriMesh::decimated_vertex_cluster`]); a raw STL has no shared vertices.
+    pub fn connected_components(&self) -> (Vec<u32>, usize) {
+        let n = self.vertices.len();
+        let mut parent: Vec<u32> = (0..n as u32).collect();
+        fn find(parent: &mut [u32], mut a: u32) -> u32 {
+            while parent[a as usize] != a {
+                parent[a as usize] = parent[parent[a as usize] as usize];
+                a = parent[a as usize];
+            }
+            a
+        }
+        for tri in &self.indices {
+            let ra = find(&mut parent, tri[0]);
+            let rb = find(&mut parent, tri[1]);
+            let rc = find(&mut parent, tri[2]);
+            let r = ra.min(rb).min(rc);
+            for x in [ra, rb, rc] {
+                parent[x as usize] = r;
+            }
+        }
+        // Number components in first-seen order for determinism.
+        let mut label: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+        let mut tri_comp = Vec::with_capacity(self.triangle_count());
+        for tri in &self.indices {
+            let root = find(&mut parent, tri[0]);
+            let next = label.len() as u32;
+            let id = *label.entry(root).or_insert(next);
+            tri_comp.push(id);
+        }
+        (tri_comp, label.len())
+    }
+
+    /// Keep only the connected component with the most triangles. On a welded
+    /// mesh this drops stray shards left behind by a box crop, leaving the
+    /// single dominant cavity shell.
+    pub fn largest_component(&self) -> TriMesh {
+        let (tri_comp, n) = self.connected_components();
+        if n <= 1 {
+            return self.clone();
+        }
+        let mut sizes = vec![0usize; n];
+        for &c in &tri_comp {
+            sizes[c as usize] += 1;
+        }
+        let best = sizes
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, &s)| s)
+            .map(|(i, _)| i as u32)
+            .unwrap_or(0);
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        let mut remap: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+        for (t, &comp) in tri_comp.iter().enumerate() {
+            if comp != best {
+                continue;
+            }
+            let mut tri = [0u32; 3];
+            for (j, slot) in tri.iter_mut().enumerate() {
+                let old = self.indices[t][j];
+                let new = *remap.entry(old).or_insert_with(|| {
+                    let id = vertices.len() as u32;
+                    vertices.push(self.vertices[old as usize]);
+                    id
+                });
+                *slot = new;
+            }
+            indices.push(tri);
+        }
+        TriMesh::new(vertices, indices)
+    }
+
     /// Per-vertex normals, area-weighted from incident faces.
     pub fn vertex_normals(&self) -> Vec<Vec3> {
         let mut normals = vec![Vec3::ZERO; self.vertices.len()];
@@ -363,5 +530,66 @@ mod tests {
         let m2 = TriMesh::load_stl(&path).unwrap();
         assert_eq!(m2.triangle_count(), m.triangle_count());
         assert_relative_eq!(m2.surface_area(), 24.0, epsilon = 1e-4);
+    }
+
+    #[test]
+    fn decimation_welds_and_preserves_closed_box() {
+        // An STL-style cube has 36 independent vertices (3 per triangle); after
+        // clustering it should weld back to 8 corners and stay closed (volume 8).
+        let cube = unit_box();
+        // Re-expand to independent vertices like a binary STL load would.
+        let mut soup = TriMesh::new(Vec::new(), Vec::new());
+        for i in 0..cube.triangle_count() {
+            let [a, b, c] = cube.triangle(i);
+            let base = soup.vertices.len() as u32;
+            soup.vertices.extend([a, b, c]);
+            soup.indices.push([base, base + 1, base + 2]);
+        }
+        assert_eq!(soup.vertices.len(), 36);
+        // Cell smaller than the cube but larger than 0: corners are 2 apart, so
+        // a cell of 0.5 keeps the 8 corners distinct.
+        let dec = soup.decimated_vertex_cluster(0.5);
+        assert_eq!(dec.vertices.len(), 8, "welded to 8 corners");
+        assert_eq!(dec.triangle_count(), 12, "no faces collapsed");
+        assert_relative_eq!(dec.signed_volume(), 8.0, epsilon = 1e-9);
+    }
+
+    #[test]
+    fn crop_keeps_only_centroids_inside() {
+        // Two boxes far apart; crop keeps the one near the origin.
+        let mut a = unit_box(); // centred at origin
+        let mut b = unit_box();
+        b.translate(Vec3::new(10.0, 0.0, 0.0));
+        let mut both = a.clone();
+        let base = both.vertices.len() as u32;
+        both.vertices.extend_from_slice(&b.vertices);
+        for f in &b.indices {
+            both.indices.push([f[0] + base, f[1] + base, f[2] + base]);
+        }
+        a = both.cropped(Aabb::new(Vec3::splat(-2.0), Vec3::splat(2.0)));
+        assert_eq!(a.triangle_count(), 12, "only the origin box survives");
+        assert_relative_eq!(a.signed_volume(), 8.0, epsilon = 1e-9);
+    }
+
+    #[test]
+    fn largest_component_picks_dominant_shell() {
+        // A 12-triangle welded box plus a disjoint 2-triangle shard; keep the box.
+        let big = unit_box();
+        let mut both = big.clone();
+        let base = both.vertices.len() as u32;
+        // A loose quad (2 triangles) far away — its own connected component.
+        both.vertices.extend([
+            Vec3::new(10.0, 0.0, 0.0),
+            Vec3::new(11.0, 0.0, 0.0),
+            Vec3::new(11.0, 1.0, 0.0),
+            Vec3::new(10.0, 1.0, 0.0),
+        ]);
+        both.indices.push([base, base + 1, base + 2]);
+        both.indices.push([base, base + 2, base + 3]);
+        let (_, n) = both.connected_components();
+        assert_eq!(n, 2, "two disjoint shells");
+        let kept = both.largest_component();
+        assert_eq!(kept.triangle_count(), 12);
+        assert_relative_eq!(kept.signed_volume(), 8.0, epsilon = 1e-9);
     }
 }

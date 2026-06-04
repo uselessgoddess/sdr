@@ -1,0 +1,72 @@
+# Real maxillary-sinus irrigation — issue #3.
+#
+# Geometry: the right maxillary sinus (гайморова пазуха) carved out of the
+# patient airway scan the author shared (`sinuses_smooth.stl`, the whole nasal
+# airspace) by `examples/prep_maxillary`. The committed mesh is
+# `assets/maxillary_sinus.stl` (~2.23 ml cavity; see assets/README.md).
+#
+# Needle frame: recovered from `prepare.blend` — entry point, firing axis and
+# the gravity direction are read straight out of the Blender object transforms
+# (see experiments/README.md). Lengths mm, flow ml/s, gravity m/s².
+#
+#   cargo run --release -- simulate --scene examples/maxillary_real.toml \
+#       --out-dir out/maxillary --preview-px 480 --preview-plane gravity
+#
+# This is the scene used for the rendered pool in the PR (the hero frame is
+# out/maxillary/preview/slice_000015.png). It is a one-off local render (~4-5 min
+# at 0.8 mm — the settle phase is cheap once the jet stops): CI exercises the same
+# mesh at a coarse resolution instead (see the `real_mesh_*` tests in src/scene.rs).
+
+[sinus]
+mesh = "assets/maxillary_sinus.stl"
+# Resolve the SDF at 0.8 mm. This is the coarsest spacing that keeps the antrum
+# connected to the needle tip: at 1.0 mm the thin ostium/recess pinches shut and
+# the cavity fragments (the tip ends up walled off), so the jet has nowhere to
+# pool. 0.8 mm reconnects 99% of the cavity; finer only adds cost.
+model_resolution_mm = 0.8
+
+[needle]
+# Nearest in-cavity point to the recovered Blender entry (24.6, 15.7, 18.9),
+# nudged ~2 mm toward the antrum centroid so the emitter sits safely inside.
+tip_mm = [17.31, 7.66, 19.81]
+# Local firing axis from OBCylinder.001 (rot_x = 0.41119): down-and-forward.
+axis = [0.0, -0.98, 0.20]
+diameter_mm = 0.8
+flow_rate_ml_s = 4.0
+# Fixed-volume irrigation: 4 ml/s for 0.25 s delivers a 1.0 ml dose into the
+# 2.23 ml cavity (~45% fill), then the jet stops. Injecting for the whole run
+# would push 2.4 ml into a 2.23 ml cavity and overfill the antrum; a real
+# irrigation is a bounded dose that pools, not a tap left running.
+inject_s = 0.25
+
+[fluid]
+density_kg_m3 = 1000.0
+# Blender world gravity (0,0,-9.81) mapped into the mesh-local frame: the fluid
+# falls down-and-back, which is what makes it pool against the antrum floor.
+gravity_m_s2 = [0.0, 8.03, -5.63]
+# More PIC damping (0.7) than the watery default. The thin jet still carries the
+# dose to the floor, but the extra damping bleeds off the splash so the pool
+# settles into a calm, sharp free surface instead of sloshing; at 0.9 the broad
+# membrane load stays ~2× higher and the surface keeps rippling to the last frame.
+flip_ratio = 0.7
+particles_per_cell = 8
+# Anti-clumping: Zhu-Bridson volume control biases the grid out of over-packed
+# cells, and deterministic redistribution moves the surplus of a *motionless*
+# clump (which has no divergence for the projection to act on) into open cavity
+# cells — draining each clump *downhill* (along gravity) into open space so the
+# fluid stacks into a settling pool with a rising free surface. Both are on for
+# every real-mesh run.
+volume_stiffness = 1.0
+redistribute = true
+
+[sim]
+resolution_mm = 0.8
+# 0.60 s total: 0.25 s of irrigation (needle.inject_s) then 0.35 s for the dose
+# to drain down and settle into a still pool with a visible free surface — the
+# target frame. By the final frame ~92% of the fluid sits in the lower half of
+# the cavity (gravity-depth) under a clean surface. The settle phase is cheap:
+# once the needle stops, the CFL sub-step count falls away with the fluid speed.
+duration_s = 0.6
+frames = 16
+pcg_iters = 200
+pcg_tol = 1e-6

@@ -47,6 +47,53 @@ pub fn write_points_vtk(path: impl AsRef<Path>, positions: &[Vec3]) -> Result<()
     Ok(())
 }
 
+/// Read particle positions back from an ASCII legacy-VTK point cloud written by
+/// [`write_points_vtk`].
+///
+/// Parses the `POINTS n double` block and returns the `n` positions; the
+/// `CELLS`/`CELL_TYPES` bookkeeping that follows is ignored. This lets a saved
+/// frame be re-rendered offline (e.g. to retune the amber pool look) without
+/// re-running the simulation.
+pub fn read_points_vtk(path: impl AsRef<Path>) -> Result<Vec<Vec3>> {
+    use std::io::Read;
+    let path = path.as_ref();
+    let mut text = String::new();
+    File::open(path)
+        .with_context(|| format!("opening {}", path.display()))?
+        .read_to_string(&mut text)
+        .with_context(|| format!("reading {}", path.display()))?;
+
+    let mut lines = text.lines();
+    // Find the "POINTS <n> <type>" header.
+    let n = loop {
+        let line = lines
+            .next()
+            .with_context(|| format!("{}: no POINTS block", path.display()))?;
+        let mut it = line.split_whitespace();
+        if it.next() == Some("POINTS") {
+            break it
+                .next()
+                .and_then(|t| t.parse::<usize>().ok())
+                .with_context(|| format!("{}: malformed POINTS header", path.display()))?;
+        }
+    };
+    // The next 3*n whitespace-separated tokens are the coordinates (one point per
+    // line as written, but we tokenise so any whitespace layout reads back).
+    let mut toks = lines.flat_map(|l| l.split_whitespace());
+    let mut pts = Vec::with_capacity(n);
+    for _ in 0..n {
+        let mut coord = [0.0f64; 3];
+        for c in coord.iter_mut() {
+            *c = toks
+                .next()
+                .and_then(|t| t.parse::<f64>().ok())
+                .with_context(|| format!("{}: truncated POINTS data", path.display()))?;
+        }
+        pts.push(Vec3::new(coord[0], coord[1], coord[2]));
+    }
+    Ok(pts)
+}
+
 /// Write particle positions as raw little-endian `f32` triples (`.xyz`), the
 /// compact binary point cloud `splashsurf` reads with `--particle-radius`.
 pub fn write_points_xyz(path: impl AsRef<Path>, positions: &[Vec3]) -> Result<()> {
@@ -94,6 +141,25 @@ mod tests {
         assert!(text.contains("POINTS 2 double"));
         assert!(text.contains("0 1 2"));
         assert!(text.contains("CELL_TYPES 2"));
+    }
+
+    #[test]
+    fn vtk_round_trips_positions() {
+        let dir = roundtrip_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let pts = vec![
+            Vec3::new(0.0, 1.0, 2.0),
+            Vec3::new(-1.5, 0.25, 3.5),
+            Vec3::new(10.0, -20.0, 30.0),
+        ];
+        let path = dir.join("rt.vtk");
+        write_points_vtk(&path, &pts).unwrap();
+        let back = read_points_vtk(&path).unwrap();
+        assert_eq!(back.len(), pts.len());
+        // Rust's f64 Display is round-trippable, so positions return bit-exact.
+        for (a, b) in pts.iter().zip(&back) {
+            assert_eq!((a.x, a.y, a.z), (b.x, b.y, b.z));
+        }
     }
 
     #[test]
