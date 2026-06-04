@@ -274,7 +274,7 @@ fn cmd_simulate(args: SimulateArgs) -> Result<()> {
 
         if !args.quiet {
             eprintln!(
-                "frame {f:>4}/{}: t={:.3}s  particles={:>6}  fill={:>5.1}%  wash={:>5.1}%  p_wall={:>6.1} mmHg  pcg={}",
+                "frame {f:>4}/{}: t={:.3}s  particles={:>6}  fill={:>5.1}%  wash={:>5.1}%  p_wall={:>6.1} mmHg  pcg={}  subs={}",
                 built.frames,
                 m.time_s,
                 m.particles,
@@ -282,6 +282,7 @@ fn cmd_simulate(args: SimulateArgs) -> Result<()> {
                 m.wall_coverage * 100.0,
                 m.peak_wall_pressure_mmhg,
                 m.pcg_iters,
+                built.solver.last_substeps,
             );
             if std::env::var("SDR_DEBUG_FILL").is_ok() {
                 // Spreading vs. clumping: fluid_cells should climb toward the

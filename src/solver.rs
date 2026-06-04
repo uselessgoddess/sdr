@@ -30,12 +30,10 @@ use crate::sdf::Sdf;
 /// projection ever shoving a particle through a wall.
 const VC_MAX_FRACTION: f64 = 0.25;
 
-/// Particle redistribution (see [`Solver::redistribute`]). A cell is "over-full"
-/// once it holds more than `REDIST_CAP_FACTOR ×` the seeding density; its surplus
-/// is diffused into the least-occupied open cavity neighbour. A handful of
-/// diffusion sweeps per sub-step keeps the injection point from ever piling up,
-/// while staying local enough not to teleport fluid across the cavity.
-const REDIST_CAP_FACTOR: f64 = 2.0;
+/// Number of redistribution diffusion sweeps per sub-step (see
+/// [`Solver::redistribute`]). A handful keeps the injection point from ever
+/// piling up while staying local enough not to teleport fluid across the cavity.
+/// The over-fill ceiling itself is the per-fluid [`FluidParams::redist_cap_factor`].
 const REDIST_SWEEPS: usize = 4;
 
 /// Physical properties of the irrigation fluid and the simulation.
@@ -61,6 +59,15 @@ pub struct FluidParams {
     /// surplus into adjacent open cavity cells directly, which is what lets the
     /// fluid spread and pool. `true` is the default for real-mesh scenes.
     pub redistribute: bool,
+    /// Over-fill ceiling for redistribution, as a multiple of the seeding
+    /// density (see [`Solver::redistribute`]). A cell sheds surplus only once it
+    /// exceeds `redist_cap_factor × particles_per_cell`. Keep this near `1`: at
+    /// rest density the settled pool is *at* the cap, so redistribution leaves it
+    /// alone and gravity is free to shape a free surface. A larger value lets the
+    /// fluid over-compress before relief; a much larger one was the original bug,
+    /// where redistribution diffused the pool toward a *uniform* fill (lofting
+    /// fluid back up against gravity) instead of letting it settle.
+    pub redist_cap_factor: f64,
 }
 
 impl Default for FluidParams {
@@ -72,6 +79,7 @@ impl Default for FluidParams {
             particles_per_cell: 8,
             volume_stiffness: 1.0,
             redistribute: true,
+            redist_cap_factor: 1.0,
         }
     }
 }
@@ -148,6 +156,10 @@ pub struct Solver {
     pub steps: u64,
     /// Iterations taken by the last pressure solve (diagnostic).
     pub last_pcg_iters: usize,
+    /// Sub-steps taken by the last [`Solver::step`] (diagnostic). Climbs toward
+    /// the CFL count and saturates at the per-frame cap when a velocity spike
+    /// would otherwise collapse the timestep.
+    pub last_substeps: u32,
     /// Per-cell pressure (Pa, gauge) from the last projection; `0` off-fluid.
     pub pressure: Vec<f64>,
     /// Cumulative number of particles removed at the outlet (drainage).
@@ -196,6 +208,7 @@ impl Solver {
             time: 0.0,
             steps: 0,
             last_pcg_iters: 0,
+            last_substeps: 0,
             pressure: vec![0.0; n],
             drained: 0,
             cells: vec![Cell::Air; n],
@@ -222,18 +235,45 @@ impl Solver {
     /// Advance the simulation by `dt` seconds, internally sub-stepping so the
     /// CFL condition (particles move < 1 cell/step) always holds.
     pub fn step(&mut self, dt: f64) {
+        // Bound the sub-step count per frame. `cfl_dt` shrinks the timestep from
+        // the *maximum* grid speed, so a single pathological cell — e.g. a
+        // thin-septum SDF artefact where volume control and the wall projection
+        // briefly fight — can drive `max_speed` to numerical garbage and collapse
+        // the global timestep, stalling one frame in tens of thousands of
+        // sub-steps. Advection already clamps displacement to one cell
+        // (`advect`), so the floor timestep stays stable; the floor only adds a
+        // little numerical damping, which a settling pool tolerates well. The cap
+        // sits above the legitimate jet/gravity CFL count, so well-behaved frames
+        // are unaffected and only the spike is clipped.
+        const MAX_SUBSTEPS: u32 = 512;
+        let floor = dt / MAX_SUBSTEPS as f64;
         let mut remaining = dt;
+        let mut taken = 0;
         while remaining > 1e-12 {
-            let sub = self.cfl_dt().min(remaining);
+            let sub = self.cfl_dt().max(floor).min(remaining);
             self.substep(sub);
             remaining -= sub;
+            taken += 1;
         }
+        self.last_substeps = taken;
     }
 
     /// A stable sub-step from the current maximum speed.
     fn cfl_dt(&self) -> f64 {
         let grid_speed = self.grid.max_speed();
-        let jet = self.needle.jet_speed();
+        // The jet only bounds the timestep while it is actually firing. It must
+        // be included *then* because on the very first emit the fast inflow is
+        // not yet on the grid (`grid_speed` would miss it). Once the fixed dose
+        // is delivered (`time >= inject_until`, matching `emit`) the needle adds
+        // nothing, and the still-moving jet fluid is already captured by
+        // `grid_speed` — so dropping the constant jet term here lets the
+        // sub-step count fall away as the pool comes to rest instead of pinning
+        // at the jet-CFL count for the whole settle phase.
+        let jet = if self.time < self.needle.inject_until {
+            self.needle.jet_speed()
+        } else {
+            0.0
+        };
         let g = (self.fluid.gravity.length() * self.grid.dx).sqrt();
         let speed = grid_speed.max(jet).max(g).max(1e-6);
         // Allow ~1 cell of travel; cap so an empty sim still progresses.
@@ -415,7 +455,13 @@ impl Solver {
         let (nx, ny, nz) = (self.grid.nx, self.grid.ny, self.grid.nz);
         let ncells = nx * ny * nz;
         let target = self.fluid.particles_per_cell.max(1);
-        let cap = (REDIST_CAP_FACTOR * target as f64).ceil() as u32;
+        let cap = (self.fluid.redist_cap_factor.max(1.0) * target as f64).ceil() as u32;
+        // Unit "down" axis (gravity direction). Surplus from an over-full cell
+        // prefers to fall into the lowest neighbour that still has room, so the
+        // fluid seeks the lowest open space and stacks upward — a pool with a
+        // rising free surface — instead of diffusing isotropically toward a
+        // uniform fill (which lofts fluid back up against gravity).
+        let gdir = self.fluid.gravity.normalize_or_zero();
 
         // Valid destinations are cells whose centre lies inside the cavity; this
         // is the precomputed `self.cavity_mask` (the solid never moves).
@@ -436,38 +482,64 @@ impl Solver {
                     continue;
                 }
                 let (i, j, k) = (c % nx, (c / nx) % ny, c / (nx * ny));
-                // Gather the in-bounds face neighbours of this cell.
-                let mut neigh = [0usize; 6];
+                // Gather the in-bounds face neighbours together with their unit
+                // direction from this cell, so we can rank them by how far "down"
+                // (along gravity) they lie.
+                let mut neigh = [(0usize, 0.0f64); 6];
                 let mut nn = 0;
-                let add = |nc: usize, neigh: &mut [usize; 6], nn: &mut usize| {
-                    neigh[*nn] = nc;
-                    *nn += 1;
+                let mut add = |nc: usize, dir: Vec3| {
+                    neigh[nn] = (nc, dir.dot(gdir));
+                    nn += 1;
                 };
                 if i > 0 {
-                    add(c - 1, &mut neigh, &mut nn);
+                    add(c - 1, Vec3::new(-1.0, 0.0, 0.0));
                 }
                 if i + 1 < nx {
-                    add(c + 1, &mut neigh, &mut nn);
+                    add(c + 1, Vec3::new(1.0, 0.0, 0.0));
                 }
                 if j > 0 {
-                    add(c - nx, &mut neigh, &mut nn);
+                    add(c - nx, Vec3::new(0.0, -1.0, 0.0));
                 }
                 if j + 1 < ny {
-                    add(c + nx, &mut neigh, &mut nn);
+                    add(c + nx, Vec3::new(0.0, 1.0, 0.0));
                 }
                 if k > 0 {
-                    add(c - nx * ny, &mut neigh, &mut nn);
+                    add(c - nx * ny, Vec3::new(0.0, 0.0, -1.0));
                 }
                 if k + 1 < nz {
-                    add(c + nx * ny, &mut neigh, &mut nn);
+                    add(c + nx * ny, Vec3::new(0.0, 0.0, 1.0));
                 }
-                // Pick the least-occupied in-cavity neighbour still below the cap.
+                // Send the surplus to the **lowest in-cavity neighbour that still
+                // has room** (below the cap). Ranking by gravity (most-downhill
+                // first), then by emptiness, makes the fluid seek the lowest open
+                // space and stack upward — a settling pool with a rising free
+                // surface. Crucially the receiver must be *below the cap*: an
+                // unconditional "least-occupied neighbour" test instead diffuses
+                // occupancy toward a uniform fill, which lofts fluid back up
+                // against gravity (the pool never forms). Restricting receivers to
+                // those with room means a pool already at rest density is left
+                // untouched, so gravity alone shapes it; only genuine over-packing
+                // (the point-jet clump) is relieved, draining cell-by-cell into the
+                // open space below. Ranking over a fixed neighbour-visit order with
+                // plain comparisons keeps the choice deterministic.
                 let mut best: Option<usize> = None;
-                let mut best_count = cap;
-                for &nc in &neigh[..nn] {
-                    if self.cavity_mask[nc] && count[nc] < best_count {
+                let mut best_down = f64::NEG_INFINITY;
+                let mut best_room = 0u32; // larger = emptier
+                for &(nc, down) in &neigh[..nn] {
+                    if !self.cavity_mask[nc] || count[nc] >= cap {
+                        continue;
+                    }
+                    let room = cap - count[nc];
+                    // Most-downhill first; ties broken toward the emptier cell, and
+                    // finally toward the first neighbour visited (fixed index order)
+                    // — every comparison is over a fixed deterministic ordering.
+                    let better = best.is_none()
+                        || down > best_down
+                        || (down == best_down && room > best_room);
+                    if better {
                         best = Some(nc);
-                        best_count = count[nc];
+                        best_down = down;
+                        best_room = room;
                     }
                 }
                 if let Some(nc) = best {
@@ -1129,16 +1201,58 @@ mod tests {
         center
     }
 
-    /// The heart of the FLIP de-clumping fix: an over-packed cell must be
-    /// relieved by *moving* its surplus into open neighbours — never creating or
-    /// destroying particles (mass conservation) and never flinging any into the
-    /// walls — and the whole operation must stay byte-for-byte reproducible.
+    /// The gravity-aware heart of the de-clumping fix: surplus from an
+    /// over-packed cell must fall **downhill** — into the lowest neighbour that
+    /// still has room — so the fluid stacks into a settling pool rather than
+    /// diffusing isotropically toward a uniform fill (which would loft it back
+    /// up against gravity). With a surplus small enough to fit in a single
+    /// neighbour, every surplus particle should land in the one cell directly
+    /// "below" along gravity, and none should be pushed uphill.
+    #[test]
+    fn redistribution_drains_surplus_downhill() {
+        let mut s = box_solver();
+        // Default gravity points along -y, so "down" is the j-1 neighbour.
+        assert_eq!(s.fluid.gravity, Vec3::new(0.0, -9.81, 0.0));
+
+        let cap = s.fluid.particles_per_cell; // redist_cap_factor defaults to 1.0
+        let surplus = 4; // fits inside a single neighbour (surplus < cap)
+        let n = cap + surplus;
+
+        let cell = (8usize, 8usize, 8usize);
+        pack_one_cell(&mut s, cell, n);
+        s.redistribute();
+
+        let count_at = |s: &Solver, i: usize, j: usize, k: usize| {
+            s.particles
+                .positions
+                .iter()
+                .filter(|&&p| s.cell_of(p) == Some((i, j, k)))
+                .count()
+        };
+        let here = count_at(&s, cell.0, cell.1, cell.2);
+        let below = count_at(&s, cell.0, cell.1 - 1, cell.2); // -y, downhill
+        let above = count_at(&s, cell.0, cell.1 + 1, cell.2); // +y, uphill
+
+        assert_eq!(s.particles.len(), n, "mass not conserved");
+        assert_eq!(here, cap, "source cell should drain down to the cap");
+        assert_eq!(
+            below, surplus,
+            "all surplus should fall into the cell directly below"
+        );
+        assert_eq!(above, 0, "nothing should be lofted uphill against gravity");
+    }
+
+    /// An over-packed cell must be relieved by *moving* its surplus into open
+    /// neighbours — never creating or destroying particles (mass conservation),
+    /// never pushing a *receiver* past the rest-density cap (so a settled pool
+    /// is left alone, not lofted), never flinging any into the walls — and the
+    /// whole operation must stay byte-for-byte reproducible.
     #[test]
     fn redistribution_relieves_overpacked_cell_and_conserves_mass() {
         const N: usize = 100;
-        let cap = (REDIST_CAP_FACTOR * 8.0).ceil() as usize;
 
         let mut s = box_solver();
+        let cap = s.fluid.particles_per_cell; // redist_cap_factor defaults to 1.0
         let center = pack_one_cell(&mut s, (8, 8, 8), N);
         assert!(
             s.solid.sample(center) < 0.0,
@@ -1158,11 +1272,28 @@ mod tests {
             N,
             "redistribution changed the particle count (mass not conserved)"
         );
-        // The clump is relieved down to (at most) the cap, a large drop from N.
+        // The clump is relieved (peak strictly dropped from N). It need not reach
+        // the cap in one call: each cell sheds only into neighbours that have
+        // room, so the source drains gradually as gravity clears the space below.
         let peak = s.max_particles_per_cell();
         assert!(
-            peak <= cap && peak < N,
-            "redistribution failed to relieve the clump (peak={peak}, cap={cap}, N={N})"
+            peak < N,
+            "redistribution failed to relieve the clump (peak={peak}, N={N})"
+        );
+        // The cap binds on *receivers*: at most one cell (the still-draining
+        // source) may sit above it — every cell that received surplus is held at
+        // or below the cap, so a pool already at rest density is never overfilled.
+        let (nx, ny, nz) = (s.grid.nx, s.grid.ny, s.grid.nz);
+        let mut count = vec![0u32; nx * ny * nz];
+        for &p in &s.particles.positions {
+            if let Some((i, j, k)) = s.cell_of(p) {
+                count[(k * ny + j) * nx + i] += 1;
+            }
+        }
+        let over_cap = count.iter().filter(|&&c| c as usize > cap).count();
+        assert!(
+            over_cap <= 1,
+            "a receiving cell was pushed past the cap (cells over cap: {over_cap})"
         );
         // Nothing was flung into the walls; every particle stays finite.
         assert!(s.particles.positions.iter().all(|p| p.is_finite()));

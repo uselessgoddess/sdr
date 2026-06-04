@@ -148,6 +148,9 @@ pub struct FluidConfig {
     /// (`true` = default). The decisive anti-clumping step for a point jet in a
     /// closed cavity. See [`FluidParams::redistribute`].
     pub redistribute: bool,
+    /// Redistribution over-fill ceiling, as a multiple of `particles_per_cell`
+    /// (default `1`, i.e. rest density). See [`FluidParams::redist_cap_factor`].
+    pub redist_cap_factor: f64,
 }
 
 impl Default for FluidConfig {
@@ -160,6 +163,7 @@ impl Default for FluidConfig {
             particles_per_cell: f.particles_per_cell,
             volume_stiffness: f.volume_stiffness,
             redistribute: f.redistribute,
+            redist_cap_factor: f.redist_cap_factor,
         }
     }
 }
@@ -177,6 +181,7 @@ impl FluidConfig {
             particles_per_cell: self.particles_per_cell,
             volume_stiffness: self.volume_stiffness,
             redistribute: self.redistribute,
+            redist_cap_factor: self.redist_cap_factor,
         }
     }
 }
