@@ -37,6 +37,35 @@ as the lining is washed; fill fraction (blue) plateaus near 20 % once inflow
 balances drainage; focal membrane pressure (red) spikes where the jet impinges.
 All four images are produced by `sdr simulate` itself — no external tooling.*
 
+### …and on a real patient sinus
+
+The same solver runs on a cavity segmented from a real CT. The **right
+maxillary sinus** ([`assets/maxillary_sinus.stl`](assets/maxillary_sinus.stl),
+~2.23 ml) was carved out of the author's full nasal-airway scan, and the needle
+entry, firing axis and gravity direction were recovered straight from the
+`prepare.blend` study they shared (the reproducibility trail is in
+[`experiments/`](experiments/) and [`assets/README.md`](assets/README.md)). A
+bounded **1 ml dose** (4 ml/s for 0.25 s) is fired up from the antrum floor,
+then left to settle for 0.35 s:
+
+| jet enters from below | antrum fills | dose settles into a pool |
+| :---: | :---: | :---: |
+| ![jet](docs/screenshots/maxillary_jet.png) | ![fill](docs/screenshots/maxillary_fill.png) | ![pool](docs/screenshots/maxillary_pool.png) |
+
+*A gravity-projected side view of the real antrum ([`examples/maxillary_real.toml`](examples/maxillary_real.toml)).
+The amber shade is fluid depth (a Beer–Lambert look matching the author's
+Blender render); the red line is the needle. Under gravity the dose falls to the
+floor and pools with a sharp free surface — by the final frame **92 % of the
+fluid sits in the lower half** of the cavity, at a **44.9 % fill** (the 1 ml dose
+in 2.23 ml), with mass conserved to 1.000 and byte-identical particles across
+runs.* Reproduce it (one local render, ~4–5 min at 0.8 mm):
+
+```sh
+cargo run --release -- simulate --scene examples/maxillary_real.toml \
+    --out-dir out/maxillary --preview-px 480 --preview-plane gravity
+# the hero frame is out/maxillary/preview/slice_000015.png
+```
+
 ## Why it exists
 
 CT slices don’t show a clinician how irrigant actually moves: where it pools,
