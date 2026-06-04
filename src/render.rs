@@ -256,9 +256,14 @@ fn draw_amber_pool(
     w: u32,
     h: u32,
 ) {
-    const R: i64 = 4; // splat radius in pixels
-    const PEAK: f64 = 0.18; // per-particle peak coverage at the disk centre
-    let rr = (R * R) as f64;
+    // Splat radius scales with resolution so the pool reads as a continuous
+    // film rather than isolated dots: ~1/80 of the long edge, floored so small
+    // previews still splat a few pixels. PEAK is the per-particle peak coverage
+    // at the disk centre; a handful of overlapping splats then saturate to a
+    // solid pool while a lone particle stays a faint speck.
+    let r = ((w.max(h) as f64) / 80.0).round().max(3.0) as i64;
+    const PEAK: f64 = 0.22;
+    let rr = (r * r) as f64;
 
     let mut cov = vec![0.0f64; (w as usize) * (h as usize)];
     for p in &solver.particles.positions {
@@ -266,8 +271,8 @@ fn draw_amber_pool(
             continue;
         }
         let (cx, cy) = to_px(*p);
-        for dy in -R..=R {
-            for dx in -R..=R {
+        for dy in -r..=r {
+            for dx in -r..=r {
                 let d2 = (dx * dx + dy * dy) as f64;
                 if d2 > rr {
                     continue;
